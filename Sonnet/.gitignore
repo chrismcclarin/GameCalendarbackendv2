@@ -1,0 +1,99 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# Environment variables - CRITICAL: Never commit these!
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+.env.*.local
+
+# Database
+*.sqlite
+*.sqlite3
+*.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+lerna-debug.log*
+import.log
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+.nyc_output/
+
+# Testing
+.jest/
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+
+# Archives (unless needed)
+*.zip
+*.tar
+*.tar.gz
+*.rar
+
+# Sentry
+.sentryclirc
+
+# Large data files
+data/bgg-games.csv
+tabletopbackend_v2_rewrite.zip
+
+# Heroku
+.heroku/
+
+# Local data files (large CSV files should not be committed)
+# Uncomment if you don't want to commit the BGG CSV
+# data/bgg-games.csv
+
+# Test database
+test_db/
+
+# PM2
+.pm2/
+
+# Misc
+*.pid
+*.seed
+*.pid.lock
+

@@ -1,0 +1,442 @@
+// routes/events.js
+const express = require('express');
+const { Event, Game, User, Group, EventParticipation, UserGroup } = require('../models');
+const { Op } = require('sequelize');
+const router = express.Router();
+const googleCalendarService = require('../services/googleCalendarService');
+
+// Helper function to format event with custom participants
+const formatEventWithCustomParticipants = (event) => {
+  const eventData = event.toJSON ? event.toJSON() : event;
+  
+  // Combine regular participants (from EventParticipation) with custom participants
+  const regularParticipants = (eventData.EventParticipations || []).map(ep => ({
+    user_id: ep.User?.id,
+    username: ep.User?.username,
+    score: ep.score,
+    faction: ep.faction,
+    is_new_player: ep.is_new_player,
+    placement: ep.placement,
+    is_custom: false
+  }));
+  
+  const customParticipants = (eventData.custom_participants || []).map(cp => ({
+    user_id: null,
+    username: cp.username,
+    score: cp.score,
+    faction: cp.faction,
+    is_new_player: cp.is_new_player || false,
+    placement: cp.placement,
+    is_custom: true
+  }));
+  
+  // Combine and sort by placement if available
+  const allParticipants = [...regularParticipants, ...customParticipants];
+  if (allParticipants.some(p => p.placement !== null)) {
+    allParticipants.sort((a, b) => {
+      if (a.placement === null) return 1;
+      if (b.placement === null) return -1;
+      return a.placement - b.placement;
+    });
+  }
+  
+  // Format winner and picked_by to include custom names
+  let winner = null;
+  if (eventData.Winner) {
+    winner = {
+      id: eventData.Winner.id,
+      username: eventData.Winner.username
+    };
+  } else if (eventData.winner_name) {
+    winner = {
+      id: null,
+      username: eventData.winner_name,
+      is_custom: true
+    };
+  }
+  
+  let pickedBy = null;
+  if (eventData.PickedBy) {
+    pickedBy = {
+      id: eventData.PickedBy.id,
+      username: eventData.PickedBy.username
+    };
+  } else if (eventData.picked_by_name) {
+    pickedBy = {
+      id: null,
+      username: eventData.picked_by_name,
+      is_custom: true
+    };
+  }
+  
+  return {
+    ...eventData,
+    EventParticipations: allParticipants, // Replace with combined participants
+    Winner: winner,
+    PickedBy: pickedBy
+  };
+};
+const { validateEventCreate, validateEventUpdate, validateUUID } = require('../middleware/validators');
+
+
+// Helper function to verify user belongs to group
+const verifyUserInGroup = async (user_id, group_id) => {
+  const user = await User.findOne({ where: { user_id } });
+  if (!user) return false;
+  
+  const userGroup = await UserGroup.findOne({
+    where: {
+      user_id: user.id,
+      group_id: group_id
+    }
+  });
+  
+  return !!userGroup;
+};
+
+// Helper function to get user's role in a group
+const getUserRoleInGroup = async (user_id, group_id) => {
+  const user = await User.findOne({ where: { user_id } });
+  if (!user) return null;
+  
+  const userGroup = await UserGroup.findOne({
+    where: {
+      user_id: user.id,
+      group_id: group_id
+    }
+  });
+  
+  return userGroup ? userGroup.role : null;
+};
+
+// Helper function to check if user is owner or admin
+const isOwnerOrAdmin = async (user_id, group_id) => {
+  const role = await getUserRoleInGroup(user_id, group_id);
+  return role === 'owner' || role === 'admin';
+};
+
+
+// Get all events for a user across all their groups
+router.get('/user/:user_id', async (req, res) => {
+  try {
+    const user = await User.findOne({ where: { user_id: req.params.user_id } });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Get all groups the user belongs to
+    const userGroups = await UserGroup.findAll({
+      where: { user_id: user.id },
+      attributes: ['group_id']
+    });
+    
+    const groupIds = userGroups.map(ug => ug.group_id);
+    
+    if (groupIds.length === 0) {
+      return res.json([]);
+    }
+    
+    // Get all events from user's groups
+    const events = await Event.findAll({
+      where: { group_id: { [Op.in]: groupIds } },
+      include: [
+        { model: Game, attributes: ['id', 'name', 'image_url', 'theme'] },
+        { 
+          model: Group, 
+          attributes: ['id', 'name', 'profile_picture_url', 'background_color', 'background_image_url'] 
+        },
+        { model: User, as: 'Winner', attributes: ['id', 'username'] },
+        { model: User, as: 'PickedBy', attributes: ['id', 'username'] },
+        {
+          model: EventParticipation,
+          include: [{ model: User, attributes: ['id', 'username', 'user_id'] }]
+        }
+      ],
+      order: [['start_date', 'DESC']]
+    });
+    
+    // Format all events with custom participants
+    const formattedEvents = events.map(event => formatEventWithCustomParticipants(event));
+    res.json(formattedEvents);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get all events for a group
+router.get('/group/:group_id', async (req, res) => {
+  try {
+    const { user_id } = req.query;
+    
+    if (user_id) {
+      const hasAccess = await verifyUserInGroup(user_id, req.params.group_id);
+      if (!hasAccess) {
+        return res.status(403).json({ error: 'Access denied to this group' });
+      }
+    }
+    
+    const events = await Event.findAll({
+      where: { group_id: req.params.group_id },
+      include: [
+        { model: Game, attributes: ['name', 'image_url', 'theme'] },
+        { model: User, as: 'Winner', attributes: ['id', 'username'] },
+        { model: User, as: 'PickedBy', attributes: ['id', 'username'] },
+        {
+          model: EventParticipation,
+          include: [{ model: User, attributes: ['id', 'username'] }]
+        }
+      ],
+      order: [['start_date', 'DESC']]
+    });
+    
+    // Format all events with custom participants
+    const formattedEvents = events.map(event => formatEventWithCustomParticipants(event));
+    res.json(formattedEvents);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+// Create new event
+router.post('/', validateEventCreate, async (req, res) => {
+  try {
+    const {
+      group_id,
+      game_id,
+      start_date,
+      duration_minutes,
+      winner_id,
+      picked_by_id,
+      winner_name,
+      picked_by_name,
+      is_group_win,
+      comments,
+      participants, // Array of { user_id, score, faction, is_new_player, placement }
+      custom_participants // Array of { username, score, faction, is_new_player, placement }
+    } = req.body;
+    
+    const event = await Event.create({
+      group_id,
+      game_id,
+      start_date,
+      duration_minutes,
+      winner_id,
+      picked_by_id,
+      winner_name: winner_name || null,
+      picked_by_name: picked_by_name || null,
+      custom_participants: custom_participants || [],
+      is_group_win,
+      comments,
+      status: 'completed'
+    });
+    
+    // Create participations for group members (with user_id)
+    if (participants && participants.length > 0) {
+      const participationData = participants
+        .filter(p => p.user_id) // Only include participants with user_id
+        .map(p => ({
+          event_id: event.id,
+          user_id: p.user_id,
+          score: p.score,
+          faction: p.faction,
+          is_new_player: p.is_new_player || false,
+          placement: p.placement
+        }));
+      
+      if (participationData.length > 0) {
+        await EventParticipation.bulkCreate(participationData);
+      }
+    }
+    
+    // Fetch complete event data
+    const completeEvent = await Event.findByPk(event.id, {
+      include: [
+        { model: Game, attributes: ['name', 'image_url'] },
+        { model: User, as: 'Winner', attributes: ['id', 'username'] },
+        { model: User, as: 'PickedBy', attributes: ['id', 'username'] },
+        {
+          model: EventParticipation,
+          include: [{ model: User, attributes: ['id', 'username'] }]
+        }
+      ]
+    });
+    
+    // Format event with custom participants
+    const formattedEvent = formatEventWithCustomParticipants(completeEvent);
+    
+    // Add to Google Calendar if event is in the future
+    // NOTE: This requires users to have Google Calendar tokens stored
+    // See GOOGLE_CALENDAR_SETUP.md for setup instructions
+    if (googleCalendarService.isFutureEvent(start_date)) {
+      try {
+        // Get all group members with their emails and Google Calendar tokens
+        const group = await Group.findByPk(group_id, {
+          include: [{
+            model: User,
+            attributes: ['id', 'email', 'google_calendar_token', 'google_calendar_refresh_token', 'google_calendar_enabled'],
+            through: { attributes: [] }
+          }]
+        });
+        
+        if (group && group.Users) {
+          const game = await Game.findByPk(game_id, { attributes: ['name'] });
+          const eventDataForCalendar = {
+            start_date: start_date,
+            duration_minutes: duration_minutes || 60,
+            game_name: game?.name || 'Board Game',
+            comments: comments || ''
+          };
+          
+          // Create calendar events for members with Google Calendar connected
+          // This will silently fail if no users have tokens, which is expected
+          await googleCalendarService.createCalendarEventsForGroup(
+            eventDataForCalendar,
+            group.Users
+          );
+        }
+      } catch (calendarError) {
+        // Log error but don't fail the event creation
+        // Log error but don't expose details in production
+        if (process.env.NODE_ENV === 'development') {
+          console.error('Error adding event to Google Calendar (non-fatal):', calendarError.message);
+        } else {
+          console.error('Error adding event to Google Calendar (non-fatal)');
+        }
+        // Event is still created successfully even if calendar fails
+      }
+    }
+    
+    res.json(formattedEvent);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+// Update event
+router.put('/:id', validateUUID('id'), validateEventUpdate, async (req, res) => {
+  try {
+    // Use verified user_id from token
+    const requesting_user_id = req.user?.user_id;
+    if (!requesting_user_id) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    
+    const event = await Event.findByPk(req.params.id);
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+    
+    // Check if user is owner or admin of the group
+    const hasPermission = await isOwnerOrAdmin(requesting_user_id, event.group_id);
+    if (!hasPermission) {
+      return res.status(403).json({ error: 'Only group owners and admins can edit events' });
+    }
+    
+    const {
+      start_date,
+      duration_minutes,
+      winner_id,
+      picked_by_id,
+      winner_name,
+      picked_by_name,
+      is_group_win,
+      comments,
+      participants,
+      custom_participants
+    } = req.body;
+    
+    await event.update({
+      start_date,
+      duration_minutes,
+      winner_id: winner_id || null,
+      picked_by_id: picked_by_id || null,
+      winner_name: winner_name || null,
+      picked_by_name: picked_by_name || null,
+      custom_participants: custom_participants || [],
+      is_group_win,
+      comments
+    });
+    
+    // Update participations if provided
+    if (participants) {
+      // Remove existing participations
+      await EventParticipation.destroy({ where: { event_id: event.id } });
+      
+      // Create new participations for group members (with user_id)
+      if (participants.length > 0) {
+        const participationData = participants
+          .filter(p => p.user_id) // Only include participants with user_id
+          .map(p => ({
+            event_id: event.id,
+            user_id: p.user_id,
+            score: p.score,
+            faction: p.faction,
+            is_new_player: p.is_new_player || false,
+            placement: p.placement
+          }));
+        
+        if (participationData.length > 0) {
+          await EventParticipation.bulkCreate(participationData);
+        }
+      }
+    }
+    
+    // Fetch updated event
+    const updatedEvent = await Event.findByPk(event.id, {
+      include: [
+        { model: Game, attributes: ['name', 'image_url'] },
+        { model: User, as: 'Winner', attributes: ['id', 'username'] },
+        { model: User, as: 'PickedBy', attributes: ['id', 'username'] },
+        {
+          model: EventParticipation,
+          include: [{ model: User, attributes: ['id', 'username'] }]
+        }
+      ]
+    });
+    
+    // Format event with custom participants
+    const formattedEvent = formatEventWithCustomParticipants(updatedEvent);
+    
+    res.json(formattedEvent);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+// Delete event
+router.delete('/:id', async (req, res) => {
+  try {
+    // Use verified user_id from token
+    const requesting_user_id = req.user?.user_id;
+    if (!requesting_user_id) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    
+    const event = await Event.findByPk(req.params.id);
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+    
+    // Check if user is owner or admin of the group
+    const hasPermission = await isOwnerOrAdmin(requesting_user_id, event.group_id);
+    if (!hasPermission) {
+      return res.status(403).json({ error: 'Only group owners and admins can delete events' });
+    }
+    
+    // Delete participations first
+    await EventParticipation.destroy({ where: { event_id: event.id } });
+    
+    // Delete event
+    await event.destroy();
+    
+    res.json({ message: 'Event deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+module.exports = router;

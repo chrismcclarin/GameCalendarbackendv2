@@ -1,0 +1,208 @@
+// routes/userGames.js
+const express = require('express');
+const { UserGame, User, Game } = require('../models');
+const bggService = require('../services/bggService');
+const router = express.Router();
+const { validateBGGUsername, validateUUID } = require('../middleware/validators');
+
+// Get all games owned by a user
+router.get('/user/:user_id', async (req, res) => {
+  try {
+    // Use verified user_id from token
+    const verified_user_id = req.user?.user_id;
+    if (!verified_user_id) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    
+    // Verify that the requested user_id matches the authenticated user
+    if (req.params.user_id !== verified_user_id) {
+      return res.status(403).json({ error: 'Forbidden: Cannot access other users\' games' });
+    }
+    
+    const user = await User.findOne({ where: { user_id: verified_user_id } });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const ownedGames = await UserGame.findAll({
+      where: { user_id: user.id },
+      include: [{ model: Game }],
+      order: [[Game, 'name', 'ASC']]
+    });
+    
+    res.json(ownedGames.map(ug => ug.Game));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Add game to user's owned games
+router.post('/user/:user_id/game/:game_id', async (req, res) => {
+  try {
+    const user = await User.findOne({ where: { user_id: req.params.user_id } });
+    const game = await Game.findByPk(req.params.game_id);
+    
+    if (!user || !game) {
+      return res.status(404).json({ error: 'User or Game not found' });
+    }
+    
+    const [userGame, created] = await UserGame.findOrCreate({
+      where: { user_id: user.id, game_id: game.id },
+      defaults: { user_id: user.id, game_id: game.id }
+    });
+    
+    if (!created) {
+      return res.json({ message: 'Game already in your collection', game });
+    }
+    
+    res.json({ message: 'Game added to your collection', game });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Remove game from user's owned games
+router.delete('/user/:user_id/game/:game_id', async (req, res) => {
+  try {
+    // Use verified user_id from token
+    const verified_user_id = req.user?.user_id;
+    if (!verified_user_id) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    
+    // Verify that the requested user_id matches the authenticated user
+    if (req.params.user_id !== verified_user_id) {
+      return res.status(403).json({ error: 'Forbidden: Cannot modify other users\' games' });
+    }
+    
+    const user = await User.findOne({ where: { user_id: verified_user_id } });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const userGame = await UserGame.findOne({
+      where: { user_id: user.id, game_id: req.params.game_id }
+    });
+    
+    if (!userGame) {
+      return res.status(404).json({ error: 'Game not found in your collection' });
+    }
+    
+    await userGame.destroy();
+    res.json({ message: 'Game removed from your collection' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Import user's entire BGG collection
+router.post('/user/:user_id/import-bgg-collection', validateUUID('user_id'), validateBGGUsername, async (req, res) => {
+  try {
+    // Use verified user_id from token
+    const verified_user_id = req.user?.user_id;
+    if (!verified_user_id) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    
+    // Verify that the requested user_id matches the authenticated user
+    if (req.params.user_id !== verified_user_id) {
+      return res.status(403).json({ error: 'Forbidden: Cannot import games for other users' });
+    }
+    
+    const { bgg_username } = req.body;
+
+    const user = await User.findOne({ where: { user_id: verified_user_id } });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Log import start (sanitized - no user ID)
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`Starting BGG collection import for BGG username: ${bgg_username.trim()}`);
+    }
+    
+    // Fetch collection from BGG
+    let collection;
+    try {
+      collection = await bggService.getUserCollection(bgg_username.trim());
+      console.log(`BGG collection fetched: ${collection.length} games found`);
+    } catch (bggError) {
+      console.error('Error fetching BGG collection:', bggError.message);
+      return res.status(500).json({ 
+        error: `Failed to fetch BGG collection: ${bggError.message}` 
+      });
+    }
+    
+    if (collection.length === 0) {
+      return res.json({ 
+        message: 'No games found in your BGG collection',
+        imported: 0,
+        skipped: 0,
+        total: 0
+      });
+    }
+
+    let imported = 0;
+    let skipped = 0;
+    const errors = [];
+
+    // Import each game
+    for (const item of collection) {
+      try {
+        // Check if game already exists in our database
+        let game = await Game.findOne({ where: { bgg_id: item.bgg_id } });
+        
+        if (!game) {
+          // Game doesn't exist, fetch full details from BGG and create it
+          const gameData = await bggService.getGameById(item.bgg_id);
+          game = await Game.create({
+            bgg_id: item.bgg_id,
+            name: gameData.name,
+            year_published: gameData.year_published,
+            min_players: gameData.min_players,
+            max_players: gameData.max_players,
+            playing_time: gameData.playing_time,
+            description: gameData.description,
+            image_url: gameData.image_url,
+            thumbnail_url: gameData.thumbnail_url,
+            is_custom: false
+          });
+        }
+
+        // Add to user's collection (findOrCreate to avoid duplicates)
+        const [userGame, created] = await UserGame.findOrCreate({
+          where: { user_id: user.id, game_id: game.id },
+          defaults: { user_id: user.id, game_id: game.id }
+        });
+
+        if (created) {
+          imported++;
+        } else {
+          skipped++;
+        }
+      } catch (error) {
+        console.error(`Error importing game ${item.bgg_id}:`, error.message);
+        errors.push({ bgg_id: item.bgg_id, name: item.name, error: error.message });
+      }
+    }
+
+    res.json({
+      message: `Imported ${imported} games from your BGG collection`,
+      imported,
+      skipped,
+      total: collection.length,
+      errors: errors.length > 0 ? errors : undefined
+    });
+  } catch (error) {
+    console.error('Error importing BGG collection:', error.message);
+    res.status(500).json({ 
+      error: error.message || 'An unexpected error occurred while importing your BGG collection'
+    });
+  }
+});
+
+module.exports = router;
+
+
+
+
