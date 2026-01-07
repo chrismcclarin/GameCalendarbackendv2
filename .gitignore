@@ -34,3 +34,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Large data files
+data/bgg-games.csv
+Sonnet/data/bgg-games.csv
