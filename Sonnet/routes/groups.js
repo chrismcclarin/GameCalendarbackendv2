@@ -47,12 +47,25 @@ router.get('/user/:user_id', async (req, res) => {
       return res.status(403).json({ error: 'Forbidden: Cannot access other users\' groups' });
     }
     
-    const user = await User.findOne({
+    let user = await User.findOne({
       where: { user_id: verified_user_id }
     });
     
+    // If user doesn't exist, auto-create using Auth0 token info
     if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+      const [newUser, created] = await User.findOrCreate({
+        where: { user_id: verified_user_id },
+        defaults: {
+          user_id: verified_user_id,
+          email: req.user.email || verified_user_id,
+          username: req.user.name || req.user.email?.split('@')[0] || 'User',
+        }
+      });
+      user = newUser;
+      
+      if (created) {
+        console.log(`Auto-created user: ${user.user_id} (${user.username})`);
+      }
     }
     
     // Get all groups for this user using UserGroup join

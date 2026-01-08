@@ -119,7 +119,26 @@ const isOwnerOrAdmin = async (user_id, group_id) => {
 // Get all events for a user across all their groups
 router.get('/user/:user_id', async (req, res) => {
   try {
-    const user = await User.findOne({ where: { user_id: req.params.user_id } });
+    let user = await User.findOne({ where: { user_id: req.params.user_id } });
+    
+    // If user doesn't exist but we have authenticated user info, auto-create
+    if (!user && req.user && req.user.user_id === req.params.user_id) {
+      // Use Auth0 token info to create user
+      const [newUser, created] = await User.findOrCreate({
+        where: { user_id: req.params.user_id },
+        defaults: {
+          user_id: req.params.user_id,
+          email: req.user.email || req.user.user_id,
+          username: req.user.name || req.user.email?.split('@')[0] || 'User',
+        }
+      });
+      user = newUser;
+      
+      if (created) {
+        console.log(`Auto-created user: ${user.user_id} (${user.username})`);
+      }
+    }
+    
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
