@@ -32,18 +32,31 @@ router.get('/:user_id', async (req, res) => {
     // If user doesn't exist but we have authenticated user info, auto-create
     if (!user && req.user && req.user.user_id === req.params.user_id) {
       // Use Auth0 token info to create user
-      const [newUser, created] = await User.findOrCreate({
-        where: { user_id: req.params.user_id },
-        defaults: {
-          user_id: req.params.user_id,
-          email: req.user.email || req.user.user_id,
-          username: req.user.name || req.user.email?.split('@')[0] || 'User',
-        }
-      });
-      user = newUser;
+      // Email is required, so use a valid email format if not provided
+      const userEmail = req.user.email || `${req.params.user_id.replace(/[|:]/g, '-')}@auth0.local`;
+      const userName = req.user.name || req.user.email?.split('@')[0] || req.user.nickname || 'User';
       
-      if (created) {
-        console.log(`Auto-created user: ${user.user_id} (${user.username})`);
+      try {
+        const [newUser, created] = await User.findOrCreate({
+          where: { user_id: req.params.user_id },
+          defaults: {
+            user_id: req.params.user_id,
+            email: userEmail,
+            username: userName,
+          }
+        });
+        user = newUser;
+        
+        if (created) {
+          console.log(`Auto-created user: ${user.user_id} (${user.username})`);
+        }
+      } catch (error) {
+        // If creation fails (e.g., email already exists), try to find the user
+        console.error('Error auto-creating user:', error.message);
+        user = await User.findOne({ where: { user_id: req.params.user_id } });
+        if (!user) {
+          throw error; // Re-throw if we still can't find/create the user
+        }
       }
     }
     
