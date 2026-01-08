@@ -20,6 +20,10 @@ const apiLimiter = rateLimit({
   legacyHeaders: false, // Disable the `X-RateLimit-*` headers
   // Skip rate limiting for localhost in development
   skip: (req) => isDevelopment && (req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1'),
+  // Validate that we're behind a trusted proxy (Railway)
+  validate: {
+    trustProxy: false, // We handle trust proxy in Express, not in rate limiter
+  },
 });
 
 // Stricter rate limiter for authentication endpoints
@@ -31,6 +35,9 @@ const authLimiter = rateLimit({
   },
   skipSuccessfulRequests: true, // Don't count successful requests
   skip: (req) => isDevelopment && (req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1'),
+  validate: {
+    trustProxy: false, // We handle trust proxy in Express, not in rate limiter
+  },
 });
 
 // Stricter rate limiter for feedback endpoint (prevent spam)
@@ -41,6 +48,9 @@ const feedbackLimiter = rateLimit({
     error: 'Too many feedback submissions, please try again later.',
   },
   skip: (req) => isDevelopment && (req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1'),
+  validate: {
+    trustProxy: false, // We handle trust proxy in Express, not in rate limiter
+  },
 });
 
 // Very strict rate limiter for sensitive operations (create/update/delete)
@@ -51,6 +61,9 @@ const strictLimiter = rateLimit({
     error: 'Too many write operations, please try again later.',
   },
   skip: (req) => isDevelopment && (req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1'),
+  validate: {
+    trustProxy: false, // We handle trust proxy in Express, not in rate limiter
+  },
 });
 
 // Middleware that only applies strict limiter to write operations (POST, PUT, DELETE)

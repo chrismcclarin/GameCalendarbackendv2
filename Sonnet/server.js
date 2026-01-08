@@ -41,8 +41,9 @@ const app = express();
 const PORT = process.env.PORT || 4000;
 
 // Trust proxy - required for Railway and other platforms that use reverse proxies
-// This allows Express to correctly identify client IPs from X-Forwarded-* headers
-app.set('trust proxy', true);
+// Set to 1 to trust only the first proxy (Railway's reverse proxy)
+// This is more secure than 'true' which trusts all proxies
+app.set('trust proxy', 1);
 
 // HTTPS Enforcement (for production)
 // Note: Heroku handles HTTPS at the load balancer, but this adds extra protection
