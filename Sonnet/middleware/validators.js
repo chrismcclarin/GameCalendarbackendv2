@@ -36,21 +36,43 @@ const validateGroupUpdate = [
     .isLength({ min: 1, max: 50 })
     .withMessage('Group name must be between 1 and 50 characters'),
   body('profile_picture_url')
-    .optional()
-    .isURL()
-    .withMessage('Profile picture URL must be a valid URL')
-    .isLength({ max: 500 })
-    .withMessage('Profile picture URL must be less than 500 characters'),
+    .optional({ checkFalsy: true })
+    .custom((value) => {
+      // Allow empty string, null, or undefined
+      if (!value || value.trim() === '') {
+        return true;
+      }
+      // If value is provided, validate it's a URL
+      const urlRegex = /^https?:\/\/.+/;
+      if (!urlRegex.test(value)) {
+        throw new Error('Profile picture URL must be a valid URL');
+      }
+      if (value.length > 500) {
+        throw new Error('Profile picture URL must be less than 500 characters');
+      }
+      return true;
+    }),
   body('background_color')
-    .optional()
+    .optional({ checkFalsy: true })
     .matches(/^#[0-9A-Fa-f]{6}$/)
     .withMessage('Background color must be a valid hex color (e.g., #ffffff)'),
   body('background_image_url')
-    .optional()
-    .isURL()
-    .withMessage('Background image URL must be a valid URL')
-    .isLength({ max: 500 })
-    .withMessage('Background image URL must be less than 500 characters'),
+    .optional({ checkFalsy: true })
+    .custom((value) => {
+      // Allow empty string, null, or undefined
+      if (!value || value.trim() === '') {
+        return true;
+      }
+      // If value is provided, validate it's a URL
+      const urlRegex = /^https?:\/\/.+/;
+      if (!urlRegex.test(value)) {
+        throw new Error('Background image URL must be a valid URL');
+      }
+      if (value.length > 500) {
+        throw new Error('Background image URL must be less than 500 characters');
+      }
+      return true;
+    }),
   validate
 ];
 
