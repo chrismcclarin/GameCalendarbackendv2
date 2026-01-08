@@ -202,6 +202,19 @@ const validateUUID = (paramName = 'id') => [
   validate
 ];
 
+// Validate Auth0 user_id (not a UUID, can contain pipes, dashes, etc.)
+// Format: provider|id (e.g., google-oauth2|107459289778553956693)
+const validateAuth0UserId = (paramName = 'user_id') => [
+  param(paramName)
+    .isString()
+    .trim()
+    .isLength({ min: 1, max: 255 })
+    .withMessage(`${paramName} must be a valid user ID string`)
+    .matches(/^[a-zA-Z0-9_\-|:]+$/)
+    .withMessage(`${paramName} must be a valid Auth0 user ID format`),
+  validate
+];
+
 module.exports = {
   validate,
   validateGroupCreate,
@@ -213,5 +226,6 @@ module.exports = {
   validateBGGUsername,
   validateFeedback,
   validateUUID,
+  validateAuth0UserId,
 };
 

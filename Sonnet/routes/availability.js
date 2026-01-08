@@ -4,6 +4,7 @@ const express = require('express');
 const { UserAvailability, User } = require('../models');
 const availabilityService = require('../services/availabilityService');
 const { handleServerError } = require('../utils/errorHandler');
+const { validateUUID, validateAuth0UserId } = require('../middleware/validators');
 const router = express.Router();
 const { body, param, query, validationResult } = require('express-validator');
 
@@ -23,15 +24,9 @@ const validate = (req, res, next) => {
   next();
 };
 
-// Validate UUID parameter
-const validateUUID = (paramName) => [
-  param(paramName).isUUID().withMessage(`${paramName} must be a valid UUID`),
-  validate
-];
-
 // Get user's availability for a date range
 router.get('/user/:user_id', 
-  validateUUID('user_id'),
+  validateAuth0UserId('user_id'),
   async (req, res) => {
     try {
       const verified_user_id = req.user?.user_id;
@@ -79,7 +74,7 @@ router.get('/user/:user_id',
 
 // Create recurring availability pattern
 router.post('/user/:user_id/recurring',
-  validateUUID('user_id'),
+  validateAuth0UserId('user_id'),
   [
     body('dayOfWeek')
       .isInt({ min: 0, max: 6 })
@@ -157,7 +152,7 @@ router.post('/user/:user_id/recurring',
 
 // Create specific date/time override
 router.post('/user/:user_id/override',
-  validateUUID('user_id'),
+  validateAuth0UserId('user_id'),
   [
     body('date')
       .isISO8601()
@@ -305,7 +300,7 @@ router.get('/group/:group_id/overlaps',
 
 // Get user's availability patterns (for editing/deleting)
 router.get('/user/:user_id/patterns',
-  validateUUID('user_id'),
+  validateAuth0UserId('user_id'),
   async (req, res) => {
     try {
       const verified_user_id = req.user?.user_id;
