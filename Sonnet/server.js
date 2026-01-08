@@ -75,12 +75,45 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false, // Allow embedding if needed
 }));
 
-// 2. CORS configuration - restrict to frontend domain only
+// 2. CORS configuration - allow frontend domains
+// Support both localhost (development) and production domains
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:3001', // Alternative local port
+  process.env.FRONTEND_URL, // Production frontend URL from env
+  process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null, // Vercel preview deployments
+].filter(Boolean); // Remove null/undefined values
+
+// Add any additional origins from environment variable (comma-separated)
+if (process.env.ALLOWED_ORIGINS) {
+  allowedOrigins.push(...process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim()));
+}
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, Postman, etc.) in development
+    if (!origin && process.env.NODE_ENV !== 'production') {
+      return callback(null, true);
+    }
+    
+    // Check if origin is in allowed list
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      // In production, be strict about origins
+      if (process.env.NODE_ENV === 'production') {
+        console.warn(`CORS: Blocked request from origin: ${origin}`);
+        callback(new Error('Not allowed by CORS'));
+      } else {
+        // In development, allow any origin
+        callback(null, true);
+      }
+    }
+  },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
 }));
 
 // 3. Request body parsing with size limit
