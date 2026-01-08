@@ -39,10 +39,13 @@ const validateGroupUpdate = [
     .optional({ checkFalsy: true })
     .custom((value) => {
       // Allow empty string, null, or undefined
-      if (!value || value.trim() === '') {
+      if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) {
         return true;
       }
       // If value is provided, validate it's a URL
+      if (typeof value !== 'string') {
+        throw new Error('Profile picture URL must be a string');
+      }
       const urlRegex = /^https?:\/\/.+/;
       if (!urlRegex.test(value)) {
         throw new Error('Profile picture URL must be a valid URL');
@@ -60,10 +63,13 @@ const validateGroupUpdate = [
     .optional({ checkFalsy: true })
     .custom((value) => {
       // Allow empty string, null, or undefined
-      if (!value || value.trim() === '') {
+      if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) {
         return true;
       }
       // If value is provided, validate it's a URL
+      if (typeof value !== 'string') {
+        throw new Error('Background image URL must be a string');
+      }
       const urlRegex = /^https?:\/\/.+/;
       if (!urlRegex.test(value)) {
         throw new Error('Background image URL must be a valid URL');
