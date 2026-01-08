@@ -207,6 +207,123 @@ class GoogleCalendarService {
 
     return results;
   }
+
+  /**
+   * Get busy times from Google Calendar for a date range
+   * Uses the freebusy API for efficiency
+   * @param {Object} user - User object with google_calendar_token and google_calendar_refresh_token
+   * @param {Date|string} startDate - Start date for query
+   * @param {Date|string} endDate - End date for query
+   * @param {string} timezone - Timezone for the query (default: UTC)
+   * @returns {Promise<Array>} Array of busy time slots in 30-minute blocks
+   * Format: [{ date: "YYYY-MM-DD", startTime: "HH:MM", endTime: "HH:MM" }, ...]
+   */
+  async getBusyTimesForDateRange(user, startDate, endDate, timezone = 'UTC') {
+    try {
+      if (!user.google_calendar_token) {
+        return [];
+      }
+
+      let accessToken = user.google_calendar_token;
+      const refreshToken = user.google_calendar_refresh_token;
+
+      const oauth2Client = new google.auth.OAuth2(
+        process.env.GOOGLE_CLIENT_ID,
+        process.env.GOOGLE_CLIENT_SECRET,
+        process.env.GOOGLE_REDIRECT_URI || 'http://localhost:4000/api/auth/google/callback'
+      );
+
+      oauth2Client.setCredentials({
+        access_token: accessToken,
+        refresh_token: refreshToken,
+      });
+
+      const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+
+      // Convert dates to ISO strings
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      
+      // Use freebusy API for efficiency
+      const freebusyResponse = await calendar.freebusy.query({
+        requestBody: {
+          timeMin: start.toISOString(),
+          timeMax: end.toISOString(),
+          timeZone: timezone,
+          items: [{ id: 'primary' }],
+        },
+      });
+
+      // Extract busy periods
+      const busyPeriods = freebusyResponse.data.calendars?.primary?.busy || [];
+      
+      // Convert busy periods to 30-minute time slots
+      const busySlots = [];
+      
+      for (const period of busyPeriods) {
+        const periodStart = new Date(period.start);
+        const periodEnd = new Date(period.end);
+        
+        // Round start time down to nearest 30 minutes
+        const startMinutes = periodStart.getMinutes();
+        const roundedStartMinutes = Math.floor(startMinutes / 30) * 30;
+        const slotStart = new Date(periodStart);
+        slotStart.setMinutes(roundedStartMinutes, 0, 0);
+        
+        // Round end time up to nearest 30 minutes
+        const endMinutes = periodEnd.getMinutes();
+        const roundedEndMinutes = Math.ceil(endMinutes / 30) * 30;
+        const slotEnd = new Date(periodEnd);
+        if (roundedEndMinutes === 60) {
+          slotEnd.setHours(slotEnd.getHours() + 1);
+          slotEnd.setMinutes(0, 0, 0);
+        } else {
+          slotEnd.setMinutes(roundedEndMinutes, 0, 0);
+        }
+        
+        // Generate 30-minute slots
+        let currentSlot = new Date(slotStart);
+        while (currentSlot < slotEnd) {
+          const nextSlot = new Date(currentSlot.getTime() + 30 * 60 * 1000);
+          
+          // Format as date and time strings
+          const dateStr = currentSlot.toISOString().split('T')[0];
+          const timeStr = currentSlot.toTimeString().slice(0, 5); // HH:MM format
+          const endTimeStr = nextSlot.toTimeString().slice(0, 5);
+          
+          busySlots.push({
+            date: dateStr,
+            startTime: timeStr,
+            endTime: endTimeStr,
+          });
+          
+          currentSlot = nextSlot;
+        }
+      }
+
+      return busySlots;
+    } catch (error) {
+      // If token expired and we have a refresh token, try to refresh and retry
+      if (error.code === 401 && user.google_calendar_refresh_token) {
+        try {
+          console.log('Access token expired, attempting to refresh...');
+          const newAccessToken = await this.refreshAccessToken(user.google_calendar_refresh_token);
+          
+          // Update user object with new token
+          user.google_calendar_token = newAccessToken;
+          
+          // Retry the request
+          return await this.getBusyTimesForDateRange(user, startDate, endDate, timezone);
+        } catch (refreshError) {
+          console.error('Error refreshing token and retrying:', refreshError.message);
+          throw new Error(`Failed to get busy times after token refresh: ${refreshError.message}`);
+        }
+      }
+      
+      console.error('Error getting busy times from Google Calendar:', error.message);
+      throw new Error(`Failed to get busy times: ${error.message}`);
+    }
+  }
 }
 
 module.exports = new GoogleCalendarService();

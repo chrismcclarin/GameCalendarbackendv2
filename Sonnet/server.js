@@ -35,6 +35,7 @@ const gameReviewRoutes = require('./routes/gameReviews');
 const userGameRoutes = require('./routes/userGames');
 const feedbackRoutes = require('./routes/feedback');
 const googleAuthRoutes = require('./routes/googleAuth');
+const availabilityRoutes = require('./routes/availability');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -106,6 +107,7 @@ app.use('/api/lists', verifyAuth0Token, listRoutes);
 app.use('/api/game-reviews', writeOperationLimiter, verifyAuth0Token, gameReviewRoutes);
 app.use('/api/user-games', writeOperationLimiter, verifyAuth0Token, userGameRoutes);
 app.use('/api/auth', authLimiter, verifyAuth0Token, googleAuthRoutes);
+app.use('/api/availability', writeOperationLimiter, verifyAuth0Token, availabilityRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
@@ -135,8 +137,50 @@ app.use((err, req, res, next) => {
 // Initialize database and start server
 const startServer = async () => {
   try {
-    await sequelize.authenticate();
-    console.log('Database connection established successfully.');
+    console.log('Attempting to connect to database...');
+    console.log('DATABASE_URL present:', !!process.env.DATABASE_URL);
+    console.log('POSTGRES_URL present:', !!process.env.POSTGRES_URL);
+    console.log('NODE_ENV:', process.env.NODE_ENV);
+    
+    // Add retry logic for database connection with different SSL configurations
+    let retries = 5;
+    let connected = false;
+    let lastError = null;
+    
+    while (retries > 0 && !connected) {
+      try {
+        await sequelize.authenticate();
+        connected = true;
+        console.log('Database connection established successfully.');
+      } catch (error) {
+        lastError = error;
+        retries--;
+        
+        // Log detailed error information
+        console.error(`Database connection attempt failed (${6 - retries}/5):`);
+        console.error(`  Error code: ${error.code || 'N/A'}`);
+        console.error(`  Error message: ${error.message}`);
+        if (error.parent) {
+          console.error(`  Parent error: ${error.parent.message || error.parent.code || 'N/A'}`);
+        }
+        
+        if (retries > 0) {
+          const waitTime = 3000; // Wait 3 seconds before retry
+          console.log(`Retrying in ${waitTime/1000} seconds... (${retries} attempts remaining)`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+        }
+      }
+    }
+    
+    if (!connected) {
+      console.error('All database connection attempts failed.');
+      console.error('Last error details:', {
+        code: lastError?.code,
+        message: lastError?.message,
+        parent: lastError?.parent?.message,
+      });
+      throw lastError;
+    }
     
     // Database sync strategy:
     // - Development: Use sync to auto-create tables (convenient for dev)

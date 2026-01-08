@@ -7,6 +7,7 @@ const EventParticipation = require('./EventParticipation');
 const UserGroup = require('./UserGroup');
 const GameReview = require('./GameReview');
 const UserGame = require('./UserGame');
+const UserAvailability = require('./UserAvailability');
 const sequelize = require('../config/database');
 
 
@@ -59,6 +60,10 @@ UserGame.belongsTo(User, { foreignKey: 'user_id' });
 Game.hasMany(UserGame, { foreignKey: 'game_id' });
 UserGame.belongsTo(Game, { foreignKey: 'game_id' });
 
+// User Availability
+User.hasMany(UserAvailability, { foreignKey: 'user_id', sourceKey: 'user_id' });
+UserAvailability.belongsTo(User, { foreignKey: 'user_id', targetKey: 'user_id' });
+
 
 module.exports = {
   User,
@@ -69,5 +74,6 @@ module.exports = {
   UserGroup,
   GameReview,
   UserGame,
+  UserAvailability,
   sequelize,
 };
