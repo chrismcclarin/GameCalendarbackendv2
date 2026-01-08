@@ -36,10 +36,9 @@ const validateGroupUpdate = [
     .isLength({ min: 1, max: 50 })
     .withMessage('Group name must be between 1 and 50 characters'),
   body('profile_picture_url')
-    .optional({ values: 'falsy' })
     .custom((value) => {
       // If value is falsy (null, undefined, empty string), allow it
-      if (!value || (typeof value === 'string' && value.trim() === '')) {
+      if (value === null || value === undefined || value === '' || (typeof value === 'string' && value.trim() === '')) {
         return true;
       }
       // If value is provided, validate it's a URL
@@ -60,10 +59,9 @@ const validateGroupUpdate = [
     .matches(/^#[0-9A-Fa-f]{6}$/)
     .withMessage('Background color must be a valid hex color (e.g., #ffffff)'),
   body('background_image_url')
-    .optional({ values: 'falsy' })
     .custom((value) => {
       // If value is falsy (null, undefined, empty string), allow it
-      if (!value || (typeof value === 'string' && value.trim() === '')) {
+      if (value === null || value === undefined || value === '' || (typeof value === 'string' && value.trim() === '')) {
         return true;
       }
       // If value is provided, validate it's a URL
