@@ -3,7 +3,7 @@ const express = require('express');
 const { UserGame, User, Game } = require('../models');
 const bggService = require('../services/bggService');
 const router = express.Router();
-const { validateBGGUsername, validateUUID } = require('../middleware/validators');
+const { validateBGGUsername, validateAuth0UserId } = require('../middleware/validators');
 
 // Get all games owned by a user
 router.get('/user/:user_id', async (req, res) => {
@@ -96,7 +96,7 @@ router.delete('/user/:user_id/game/:game_id', async (req, res) => {
 });
 
 // Import user's entire BGG collection
-router.post('/user/:user_id/import-bgg-collection', validateUUID('user_id'), validateBGGUsername, async (req, res) => {
+router.post('/user/:user_id/import-bgg-collection', validateAuth0UserId('user_id'), validateBGGUsername, async (req, res) => {
   try {
     // Use verified user_id from token
     const verified_user_id = req.user?.user_id;
