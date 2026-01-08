@@ -144,7 +144,18 @@ app.use('/api/events', writeOperationLimiter, verifyAuth0Token, eventRoutes);
 app.use('/api/lists', verifyAuth0Token, listRoutes);
 app.use('/api/game-reviews', writeOperationLimiter, verifyAuth0Token, gameReviewRoutes);
 app.use('/api/user-games', writeOperationLimiter, verifyAuth0Token, userGameRoutes);
-app.use('/api/auth', authLimiter, verifyAuth0Token, googleAuthRoutes);
+// Google Auth routes - callback is public (Google redirects to it), others require auth
+// Conditional middleware: skip auth for callback route
+const conditionalAuth = (req, res, next) => {
+  // Skip auth for callback route (Google redirects to it without auth header)
+  // req.path will be '/google/callback' when router is mounted at '/api/auth'
+  if (req.path === '/google/callback' || req.originalUrl.includes('/google/callback')) {
+    return next();
+  }
+  // Apply auth for all other routes
+  return verifyAuth0Token(req, res, next);
+};
+app.use('/api/auth', authLimiter, conditionalAuth, googleAuthRoutes);
 app.use('/api/availability', writeOperationLimiter, verifyAuth0Token, availabilityRoutes);
 
 // Health check

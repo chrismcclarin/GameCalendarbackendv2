@@ -14,7 +14,68 @@ const getOAuth2Client = () => {
   );
 };
 
-// Step 1: Redirect user to Google OAuth consent screen
+// Helper function to generate Google OAuth URL
+const generateGoogleAuthUrl = async (user_id, email = null, username = null) => {
+  // Create or find user (auto-create if doesn't exist)
+  const [user, created] = await User.findOrCreate({
+    where: { user_id },
+    defaults: {
+      user_id,
+      email: email || null,
+      username: username || email?.split('@')[0] || 'User',
+    }
+  });
+
+  // Update user info if provided and user already existed
+  if (!created && (email || username)) {
+    const updateData = {};
+    if (email) updateData.email = email;
+    if (username) updateData.username = username;
+    await user.update(updateData);
+  }
+
+  const oauth2Client = getOAuth2Client();
+  
+  // Generate authorization URL
+  const scopes = [
+    'https://www.googleapis.com/auth/calendar',
+    'https://www.googleapis.com/auth/calendar.events'
+  ];
+  
+  const authUrl = oauth2Client.generateAuthUrl({
+    access_type: 'offline', // Required to get refresh token
+    scope: scopes,
+    prompt: 'consent', // Force consent screen to get refresh token
+    state: user_id, // Pass user_id in state for callback
+  });
+
+  return authUrl;
+};
+
+// Get Google OAuth URL as JSON (for authenticated API calls)
+router.get('/google/url', async (req, res) => {
+  try {
+    // Use verified user_id from token
+    const user_id = req.user?.user_id;
+    if (!user_id) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    
+    // Get user info from token (preferred) or query params (fallback for backwards compatibility)
+    const email = req.user?.email || req.query.email || null;
+    const username = req.user?.name || req.user?.nickname || req.query.username || null;
+
+    const authUrl = await generateGoogleAuthUrl(user_id, email, username);
+    
+    // Return URL as JSON
+    res.json({ authUrl });
+  } catch (error) {
+    console.error('Error generating Google OAuth URL:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Step 1: Redirect user to Google OAuth consent screen (deprecated - use /url endpoint instead)
 router.get('/google', async (req, res) => {
   try {
     // Use verified user_id from token
@@ -25,38 +86,7 @@ router.get('/google', async (req, res) => {
     
     const { email, username } = req.query; // Optional, for user creation
 
-    // Create or find user (auto-create if doesn't exist)
-    const [user, created] = await User.findOrCreate({
-      where: { user_id },
-      defaults: {
-        user_id,
-        email: email || null,
-        username: username || email?.split('@')[0] || 'User',
-      }
-    });
-
-    // Update user info if provided and user already existed
-    if (!created && (email || username)) {
-      const updateData = {};
-      if (email) updateData.email = email;
-      if (username) updateData.username = username;
-      await user.update(updateData);
-    }
-
-    const oauth2Client = getOAuth2Client();
-    
-    // Generate authorization URL
-    const scopes = [
-      'https://www.googleapis.com/auth/calendar',
-      'https://www.googleapis.com/auth/calendar.events'
-    ];
-    
-    const authUrl = oauth2Client.generateAuthUrl({
-      access_type: 'offline', // Required to get refresh token
-      scope: scopes,
-      prompt: 'consent', // Force consent screen to get refresh token
-      state: user_id, // Pass user_id in state for callback
-    });
+    const authUrl = await generateGoogleAuthUrl(user_id, email, username);
 
     // Redirect to Google
     res.redirect(authUrl);
@@ -66,7 +96,7 @@ router.get('/google', async (req, res) => {
   }
 });
 
-// Step 2: Handle OAuth callback from Google
+// Step 2: Handle OAuth callback from Google (PUBLIC - no auth required)
 router.get('/google/callback', async (req, res) => {
   try {
     const { code, state } = req.query;
