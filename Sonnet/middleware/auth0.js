@@ -75,12 +75,31 @@ const verifyAuth0Token = (req, res, next) => {
       }
 
       // Attach user info to request object
+      // Extract all available user information from the token
       req.user = {
         user_id: decoded.sub, // Auth0 user ID (sub claim)
-        email: decoded.email,
-        name: decoded.name,
+        email: decoded.email || decoded['https://your-api-identifier/email'], // Standard email or custom claim
+        email_verified: decoded.email_verified || false,
+        name: decoded.name || decoded.nickname || decoded.given_name || decoded.family_name,
+        nickname: decoded.nickname,
+        picture: decoded.picture,
+        given_name: decoded.given_name,
+        family_name: decoded.family_name,
         // Include any other claims you need
       };
+
+      // Log available token claims in development for debugging
+      if (process.env.NODE_ENV === 'development' && !req.user.email) {
+        console.log('Available token claims:', Object.keys(decoded));
+        console.log('Email not found in token. Available fields:', {
+          email: decoded.email,
+          email_verified: decoded.email_verified,
+          name: decoded.name,
+          nickname: decoded.nickname,
+          given_name: decoded.given_name,
+          family_name: decoded.family_name,
+        });
+      }
 
       next();
     }
@@ -129,8 +148,13 @@ const optionalAuth = (req, res, next) => {
 
       req.user = {
         user_id: decoded.sub,
-        email: decoded.email,
-        name: decoded.name,
+        email: decoded.email || decoded['https://your-api-identifier/email'],
+        email_verified: decoded.email_verified || false,
+        name: decoded.name || decoded.nickname || decoded.given_name || decoded.family_name,
+        nickname: decoded.nickname,
+        picture: decoded.picture,
+        given_name: decoded.given_name,
+        family_name: decoded.family_name,
       };
 
       next();

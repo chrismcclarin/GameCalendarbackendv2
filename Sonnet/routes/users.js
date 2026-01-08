@@ -32,23 +32,35 @@ router.get('/:user_id', async (req, res) => {
     // If user doesn't exist but we have authenticated user info, auto-create
     if (!user && req.user && req.user.user_id === req.params.user_id) {
       // Use Auth0 token info to create user
+      // For Google sign-in, email should be available in the token
+      const userEmail = req.user.email;
+      if (!userEmail) {
+        console.warn(`No email found in token for user ${req.params.user_id}. Available fields:`, {
+          name: req.user.name,
+          nickname: req.user.nickname,
+          given_name: req.user.given_name,
+          family_name: req.user.family_name,
+        });
+      }
+      
       // Email is required, so use a valid email format if not provided
-      const userEmail = req.user.email || `${req.params.user_id.replace(/[|:]/g, '-')}@auth0.local`;
-      const userName = req.user.name || req.user.email?.split('@')[0] || req.user.nickname || 'User';
+      // This should rarely happen with Google sign-in
+      const finalEmail = userEmail || `${req.params.user_id.replace(/[|:]/g, '-')}@auth0.local`;
+      const userName = req.user.name || req.user.nickname || req.user.given_name || req.user.email?.split('@')[0] || 'User';
       
       try {
         const [newUser, created] = await User.findOrCreate({
           where: { user_id: req.params.user_id },
           defaults: {
             user_id: req.params.user_id,
-            email: userEmail,
+            email: finalEmail,
             username: userName,
           }
         });
         user = newUser;
         
         if (created) {
-          console.log(`Auto-created user: ${user.user_id} (${user.username})`);
+          console.log(`Auto-created user: ${user.user_id} (${user.username}) with email: ${user.email}`);
         }
       } catch (error) {
         // If creation fails (e.g., email already exists), try to find the user
