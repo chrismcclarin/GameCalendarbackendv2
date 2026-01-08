@@ -3,7 +3,7 @@
 const express = require('express');
 const { UserAvailability, User } = require('../models');
 const availabilityService = require('../services/availabilityService');
-const { handleServerError } = require('../utils/errorHandler');
+const { sendSafeError } = require('../utils/errorHandler');
 const { validateUUID, validateAuth0UserId } = require('../middleware/validators');
 const router = express.Router();
 const { body, param, query, validationResult } = require('express-validator');
@@ -67,7 +67,7 @@ router.get('/user/:user_id',
 
       res.json(availability);
     } catch (error) {
-      handleServerError(res, error, 'Error fetching user availability');
+      sendSafeError(res, 500, error, 'Error fetching user availability');
     }
   }
 );
@@ -89,8 +89,19 @@ router.post('/user/:user_id/recurring',
       .isISO8601()
       .withMessage('Start date must be a valid ISO 8601 date (YYYY-MM-DD)'),
     body('end_date')
-      .optional()
-      .isISO8601()
+      .optional({ checkFalsy: true })
+      .custom((value) => {
+        // Allow null, undefined, or empty string
+        if (value === null || value === undefined || value === '') {
+          return true;
+        }
+        // If provided, must be a valid ISO 8601 date
+        const iso8601Regex = /^\d{4}-\d{2}-\d{2}$/;
+        if (!iso8601Regex.test(value)) {
+          throw new Error('End date must be a valid ISO 8601 date (YYYY-MM-DD)');
+        }
+        return true;
+      })
       .withMessage('End date must be a valid ISO 8601 date (YYYY-MM-DD)'),
     body('timezone')
       .optional()
@@ -145,7 +156,7 @@ router.post('/user/:user_id/recurring',
 
       res.status(201).json(pattern);
     } catch (error) {
-      handleServerError(res, error, 'Error creating recurring availability pattern');
+      sendSafeError(res, 500, error, 'Error creating recurring availability pattern');
     }
   }
 );
@@ -214,7 +225,7 @@ router.post('/user/:user_id/override',
 
       res.status(201).json(override);
     } catch (error) {
-      handleServerError(res, error, 'Error creating availability override');
+      sendSafeError(res, 500, error, 'Error creating availability override');
     }
   }
 );
@@ -242,7 +253,7 @@ router.delete('/:id',
       await availability.destroy();
       res.json({ message: 'Availability pattern deleted successfully' });
     } catch (error) {
-      handleServerError(res, error, 'Error deleting availability pattern');
+      sendSafeError(res, 500, error, 'Error deleting availability pattern');
     }
   }
 );
@@ -259,12 +270,18 @@ router.get('/group/:group_id/overlaps',
 
       // Verify user is a member of the group
       const { Group, UserGroup } = require('../models');
-      const userGroup = await UserGroup.findOne({
-        where: {
-          group_id: req.params.group_id,
-          user_id: verified_user_id,
-        },
-      });
+      let userGroup;
+      try {
+        userGroup = await UserGroup.findOne({
+          where: {
+            group_id: req.params.group_id,
+            user_id: verified_user_id,
+          },
+        });
+      } catch (dbError) {
+        console.error('Database error checking group membership:', dbError);
+        return sendSafeError(res, 500, dbError, 'Error checking group membership');
+      }
 
       if (!userGroup) {
         return res.status(403).json({ error: 'Forbidden: You must be a member of this group' });
@@ -284,6 +301,31 @@ router.get('/group/:group_id/overlaps',
         return res.status(400).json({ error: 'Start date must be before end date' });
       }
 
+      // Limit date range to prevent performance issues and infinite loops
+      const MAX_DATE_RANGE_DAYS = 90; // Maximum 90 days
+      const dateRangeMs = endDate.getTime() - startDate.getTime();
+      const dateRangeDays = dateRangeMs / (1000 * 60 * 60 * 24);
+      
+      if (dateRangeDays > MAX_DATE_RANGE_DAYS) {
+        return res.status(400).json({ 
+          error: `Date range too large. Maximum allowed range is ${MAX_DATE_RANGE_DAYS} days. Requested range: ${Math.ceil(dateRangeDays)} days` 
+        });
+      }
+
+      // Prevent dates too far in the past or future
+      const MAX_PAST_DAYS = 365;
+      const MAX_FUTURE_DAYS = 365;
+      const now = new Date();
+      const daysFromNow = (startDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
+      
+      if (daysFromNow < -MAX_PAST_DAYS) {
+        return res.status(400).json({ error: `Start date cannot be more than ${MAX_PAST_DAYS} days in the past` });
+      }
+      
+      if (daysFromNow > MAX_FUTURE_DAYS) {
+        return res.status(400).json({ error: `Start date cannot be more than ${MAX_FUTURE_DAYS} days in the future` });
+      }
+
       const overlaps = await availabilityService.calculateGroupOverlaps(
         req.params.group_id,
         startDate,
@@ -293,7 +335,7 @@ router.get('/group/:group_id/overlaps',
 
       res.json(overlaps);
     } catch (error) {
-      handleServerError(res, error, 'Error calculating group overlaps');
+      sendSafeError(res, 500, error, 'Error calculating group overlaps');
     }
   }
 );
@@ -319,7 +361,7 @@ router.get('/user/:user_id/patterns',
 
       res.json(patterns);
     } catch (error) {
-      handleServerError(res, error, 'Error fetching availability patterns');
+      sendSafeError(res, 500, error, 'Error fetching availability patterns');
     }
   }
 );

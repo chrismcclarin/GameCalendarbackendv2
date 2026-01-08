@@ -13,8 +13,19 @@ const sequelize = require('../config/database');
 
 // Define associations
 // Users ↔ Groups (Many-to-Many)
-User.belongsToMany(Group, { through: UserGroup, foreignKey: 'user_id' });
-Group.belongsToMany(User, { through: UserGroup, foreignKey: 'group_id' });
+// Note: UserGroup.user_id is STRING (Auth0 user_id), not UUID (Users.id)
+// So we need to specify sourceKey/targetKey to use Users.user_id instead of Users.id
+User.belongsToMany(Group, { 
+  through: UserGroup, 
+  foreignKey: 'user_id', // Column in UserGroup that references User
+  sourceKey: 'user_id' // Use Users.user_id (Auth0 string) instead of Users.id (UUID)
+});
+Group.belongsToMany(User, { 
+  through: UserGroup, 
+  foreignKey: 'group_id', // Column in UserGroup that references Group
+  otherKey: 'user_id', // Column in UserGroup that references User
+  targetKey: 'user_id' // Use Users.user_id (Auth0 string) instead of Users.id (UUID)
+});
 
 
 // Groups ↔ Events (One-to-Many)

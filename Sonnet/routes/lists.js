@@ -11,7 +11,7 @@ const verifyUserInGroup = async (user_id, group_id) => {
   
   const userGroup = await UserGroup.findOne({
     where: {
-      user_id: user.id,
+      user_id: user.user_id, // Use user.user_id (Auth0 string) not user.id (UUID)
       group_id: group_id
     }
   });

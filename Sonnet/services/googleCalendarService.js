@@ -283,7 +283,16 @@ class GoogleCalendarService {
         
         // Generate 30-minute slots
         let currentSlot = new Date(slotStart);
+        const maxSlots = 10000; // Safety limit: maximum 10,000 slots per busy period
+        let slotCount = 0;
+        
         while (currentSlot < slotEnd) {
+          // Safety check to prevent infinite loops
+          if (slotCount++ > maxSlots) {
+            console.error('Safety limit reached in getBusyTimesForDateRange. Stopping to prevent infinite loop.');
+            break;
+          }
+          
           const nextSlot = new Date(currentSlot.getTime() + 30 * 60 * 1000);
           
           // Format as date and time strings
@@ -297,7 +306,14 @@ class GoogleCalendarService {
             endTime: endTimeStr,
           });
           
+          const previousTime = currentSlot.getTime();
           currentSlot = nextSlot;
+          
+          // Safety check: ensure time actually advanced
+          if (currentSlot.getTime() === previousTime) {
+            console.error('Time did not advance in getBusyTimesForDateRange. Stopping to prevent infinite loop.');
+            break;
+          }
         }
       }
 

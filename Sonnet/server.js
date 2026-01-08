@@ -4,6 +4,20 @@ const cors = require('cors');
 const helmet = require('helmet');
 const { sequelize } = require('./models');
 
+// Global error handlers to prevent crashes from unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't exit the process - log the error and continue
+  // In production, you might want to send this to an error tracking service
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  // For uncaught exceptions, we should exit gracefully
+  // But log it first so we can see what happened
+  process.exit(1);
+});
+
 // Initialize Sentry error tracking (if DSN is provided)
 let Sentry = null;
 if (process.env.SENTRY_DSN) {

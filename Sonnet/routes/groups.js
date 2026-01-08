@@ -12,7 +12,7 @@ const getUserRoleInGroup = async (user_id, group_id) => {
   
   const userGroup = await UserGroup.findOne({
     where: {
-      user_id: user.id,
+      user_id: user.user_id, // Use user.user_id (Auth0 string) not user.id (UUID)
       group_id: group_id
     }
   });
@@ -96,7 +96,7 @@ router.get('/user/:user_id', async (req, res) => {
     // Get all groups for this user using UserGroup join
     const { UserGroup } = require('../models');
     const userGroups = await UserGroup.findAll({
-      where: { user_id: user.id },
+      where: { user_id: user.user_id }, // Use user.user_id (Auth0 string) not user.id (UUID)
       attributes: ['group_id']
     });
     
@@ -152,7 +152,7 @@ router.post('/', validateGroupCreate, async (req, res) => {
     
     // Creator is set as 'owner'
     await UserGroup.create({
-      user_id: user.id,
+      user_id: user.user_id, // Use user.user_id (Auth0 string) not user.id (UUID)
       group_id: group.id,
       role: 'owner'
     });
@@ -213,11 +213,11 @@ router.post('/:group_id/users', async (req, res) => {
     
     await UserGroup.findOrCreate({
       where: {
-        user_id: user.id,
+        user_id: user.user_id, // Use user.user_id (Auth0 string) not user.id (UUID)
         group_id: group.id
       },
       defaults: {
-        user_id: user.id,
+        user_id: user.user_id, // Use user.user_id (Auth0 string) not user.id (UUID)
         group_id: group.id,
         role: 'member'
       }
@@ -265,7 +265,7 @@ router.put('/:group_id/users/:target_user_id/role', async (req, res) => {
     
     const targetUserGroup = await UserGroup.findOne({
       where: {
-        user_id: targetUser.id,
+        user_id: targetUser.user_id, // Use targetUser.user_id (Auth0 string) not targetUser.id (UUID)
         group_id: group_id
       }
     });
@@ -370,7 +370,7 @@ router.delete('/:group_id/users/:target_user_id', async (req, res) => {
     
     const targetUserGroup = await UserGroup.findOne({
       where: {
-        user_id: targetUser.id,
+        user_id: targetUser.user_id, // Use targetUser.user_id (Auth0 string) not targetUser.id (UUID)
         group_id: group_id
       }
     });

@@ -86,7 +86,7 @@ const verifyUserInGroup = async (user_id, group_id) => {
   
   const userGroup = await UserGroup.findOne({
     where: {
-      user_id: user.id,
+      user_id: user.user_id, // Use user.user_id (Auth0 string) not user.id (UUID)
       group_id: group_id
     }
   });
@@ -101,7 +101,7 @@ const getUserRoleInGroup = async (user_id, group_id) => {
   
   const userGroup = await UserGroup.findOne({
     where: {
-      user_id: user.id,
+      user_id: user.user_id, // Use user.user_id (Auth0 string) not user.id (UUID)
       group_id: group_id
     }
   });
@@ -170,7 +170,7 @@ router.get('/user/:user_id', async (req, res) => {
     
     // Get all groups the user belongs to
     const userGroups = await UserGroup.findAll({
-      where: { user_id: user.id },
+      where: { user_id: user.user_id }, // Use user.user_id (Auth0 string) not user.id (UUID)
       attributes: ['group_id']
     });
     

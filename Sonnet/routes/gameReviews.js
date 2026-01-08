@@ -12,7 +12,7 @@ const verifyUserInGroup = async (user_id, group_id) => {
   
   const userGroup = await UserGroup.findOne({
     where: {
-      user_id: user.id,
+      user_id: user.user_id, // Use user.user_id (Auth0 string) not user.id (UUID)
       group_id: group_id
     }
   });
@@ -107,6 +107,7 @@ router.post('/', validateReviewCreate, async (req, res) => {
     }
     
     // Check if review already exists
+    // Note: GameReview.user_id is UUID (references Users.id), not Users.user_id (Auth0 string)
     const existingReview = await GameReview.findOne({
       where: { user_id: user.id, group_id, game_id }
     });
@@ -136,6 +137,7 @@ router.post('/', validateReviewCreate, async (req, res) => {
       review = existingReview;
     } else {
       // Create new review
+      // Note: GameReview.user_id is UUID (references Users.id), not Users.user_id (Auth0 string)
       review = await GameReview.create({
         user_id: user.id,
         group_id,

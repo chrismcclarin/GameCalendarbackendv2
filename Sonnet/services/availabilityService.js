@@ -17,12 +17,23 @@ class AvailabilityService {
     const start = new Date(startDate);
     const end = new Date(endDate);
     
+    // Safety check: prevent infinite loops
+    const maxDays = 365; // Maximum 365 days as a safety limit
+    const maxIterations = maxDays * 48; // 48 slots per day (30-minute intervals)
+    let iterationCount = 0;
+    
     // Start from beginning of start date
     const current = new Date(start);
     current.setHours(0, 0, 0, 0);
     
     // Generate slots for each day until end date
     while (current <= end) {
+      // Safety check to prevent infinite loops
+      if (iterationCount++ > maxIterations) {
+        console.error('Safety limit reached in generateTimeSlots. Stopping to prevent infinite loop.');
+        throw new Error('Date range too large or invalid. Maximum processing limit reached.');
+      }
+      
       // Generate 30-minute slots for this day (00:00 to 23:30)
       for (let hour = 0; hour < 24; hour++) {
         for (let minute = 0; minute < 60; minute += 30) {
@@ -45,8 +56,15 @@ class AvailabilityService {
       }
       
       // Move to next day
+      const previousDate = current.getDate();
       current.setDate(current.getDate() + 1);
       current.setHours(0, 0, 0, 0);
+      
+      // Safety check: ensure date actually advanced
+      if (current.getDate() === previousDate) {
+        console.error('Date did not advance in generateTimeSlots. Stopping to prevent infinite loop.');
+        throw new Error('Invalid date progression detected. Stopping to prevent infinite loop.');
+      }
     }
     
     return slots;
@@ -158,25 +176,38 @@ class AvailabilityService {
       // Generate all time slots for the date range
       const allSlots = this.generateTimeSlots(startDate, endDate, timezone);
       
-      // Initialize all slots as available (default: user is available)
+      // Fetch manual availability patterns from database
+      let manualPatterns;
+      try {
+        manualPatterns = await UserAvailability.findAll({
+          where: {
+            user_id: user.user_id,
+          },
+          order: [['createdAt', 'ASC']],
+        });
+      } catch (dbError) {
+        console.error(`Database error fetching availability patterns for user ${user.user_id}:`, dbError);
+        // Return empty array if database query fails - don't crash the whole calculation
+        manualPatterns = [];
+      }
+
+      // Determine initial availability state
+      // If user has recurring patterns, start with all slots unavailable
+      // Otherwise, default to available (user is available unless they say otherwise)
+      const hasRecurringPatterns = manualPatterns.some(p => p.type === 'recurring_pattern');
+      const defaultAvailability = !hasRecurringPatterns; // true if no patterns, false if patterns exist
+      
+      // Initialize all slots
       const availabilityMap = new Map();
       allSlots.forEach(slot => {
         availabilityMap.set(`${slot.date}_${slot.startTime}`, {
           ...slot,
-          isAvailable: true,
-          source: 'default', // 'default', 'recurring_pattern', 'specific_override', 'google_calendar'
+          isAvailable: defaultAvailability,
+          source: defaultAvailability ? 'default' : 'unavailable_by_default', // 'default', 'recurring_pattern', 'specific_override', 'google_calendar', 'unavailable_by_default'
         });
       });
 
-      // Fetch manual availability patterns from database
-      const manualPatterns = await UserAvailability.findAll({
-        where: {
-          user_id: user.user_id,
-        },
-        order: [['createdAt', 'ASC']],
-      });
-
-      // Apply recurring patterns first
+      // Apply recurring patterns - mark matching slots as available
       const recurringPatterns = manualPatterns.filter(p => p.type === 'recurring_pattern');
       for (const pattern of recurringPatterns) {
         allSlots.forEach(slot => {
@@ -253,13 +284,19 @@ class AvailabilityService {
       const { Group, UserGroup } = require('../models');
       
       // Get all group members
-      const group = await Group.findByPk(groupId, {
-        include: [{
-          model: User,
-          through: UserGroup,
-          attributes: ['id', 'user_id', 'username', 'email', 'google_calendar_enabled', 'google_calendar_token', 'google_calendar_refresh_token'],
-        }],
-      });
+      let group;
+      try {
+        group = await Group.findByPk(groupId, {
+          include: [{
+            model: User,
+            through: UserGroup,
+            attributes: ['id', 'user_id', 'username', 'email', 'google_calendar_enabled', 'google_calendar_token', 'google_calendar_refresh_token'],
+          }],
+        });
+      } catch (dbError) {
+        console.error('Database error fetching group:', dbError);
+        throw new Error(`Database error: ${dbError.message}`);
+      }
 
       if (!group) {
         throw new Error('Group not found');

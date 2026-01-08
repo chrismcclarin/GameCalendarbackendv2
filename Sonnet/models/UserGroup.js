@@ -10,7 +10,7 @@ const UserGroup = sequelize.define('UserGroup', {
     primaryKey: true,
   },
   user_id: {
-    type: DataTypes.UUID,
+    type: DataTypes.STRING,
     allowNull: false,
   },
   group_id: {
