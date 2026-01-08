@@ -41,13 +41,18 @@ const validateGroupUpdate = [
       if (value === null || value === undefined || value === '' || (typeof value === 'string' && value.trim() === '')) {
         return true;
       }
-      // If value is provided, validate it's a URL
+      // If value is provided, validate it's either a URL or an emoji
       if (typeof value !== 'string') {
         throw new Error('Profile picture URL must be a string');
       }
+      
+      // Check if it's a valid URL
       const urlRegex = /^https?:\/\/.+/;
-      if (!urlRegex.test(value)) {
-        throw new Error('Profile picture URL must be a valid URL');
+      // Check if it's an emoji (single character or emoji sequence)
+      const emojiRegex = /^[\p{Emoji}\p{Emoji_Presentation}\p{Emoji_Modifier_Base}\p{Emoji_Modifier}\p{Emoji_Component}]+$/u;
+      
+      if (!urlRegex.test(value) && !emojiRegex.test(value)) {
+        throw new Error('Profile picture URL must be a valid URL or an emoji');
       }
       if (value.length > 500) {
         throw new Error('Profile picture URL must be less than 500 characters');
