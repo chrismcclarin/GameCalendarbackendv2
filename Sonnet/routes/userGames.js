@@ -26,11 +26,19 @@ router.get('/user/:user_id', async (req, res) => {
     
     const ownedGames = await UserGame.findAll({
       where: { user_id: user.id },
-      include: [{ model: Game }],
+      include: [{ 
+        model: Game,
+        required: true  // Use INNER JOIN to exclude orphaned records where Game doesn't exist
+      }],
       order: [[Game, 'name', 'ASC']]
     });
     
-    res.json(ownedGames.map(ug => ug.Game));
+    // Filter out any null Games (shouldn't happen with required: true, but safety check)
+    const games = ownedGames
+      .map(ug => ug.Game)
+      .filter(game => game !== null && game !== undefined);
+    
+    res.json(games);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
