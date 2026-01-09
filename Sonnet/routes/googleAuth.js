@@ -23,7 +23,7 @@ const getOAuth2Client = () => {
 };
 
 // Helper function to generate Google OAuth URL
-const generateGoogleAuthUrl = async (user_id, email = null, username = null) => {
+const generateGoogleAuthUrl = async (user_id, email = null, username = null, frontendUrl = null) => {
   // Create or find user (auto-create if doesn't exist)
   const [user, created] = await User.findOrCreate({
     where: { user_id },
@@ -50,11 +50,18 @@ const generateGoogleAuthUrl = async (user_id, email = null, username = null) => 
     'https://www.googleapis.com/auth/calendar.events'
   ];
   
+  // Encode state with user_id and frontend URL (so callback knows where to redirect)
+  const stateData = {
+    user_id: user_id,
+    frontend_url: frontendUrl || process.env.FRONTEND_URL || 'http://localhost:3000'
+  };
+  const state = Buffer.from(JSON.stringify(stateData)).toString('base64');
+  
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: 'offline', // Required to get refresh token
     scope: scopes,
     prompt: 'consent', // Force consent screen to get refresh token
-    state: user_id, // Pass user_id in state for callback
+    state: state, // Pass encoded state with user_id and frontend_url
   });
 
   return authUrl;
@@ -72,8 +79,15 @@ router.get('/google/url', async (req, res) => {
     // Get user info from token (preferred) or query params (fallback for backwards compatibility)
     const email = req.user?.email || req.query.email || null;
     const username = req.user?.name || req.user?.nickname || req.query.username || null;
+    
+    // Get frontend URL from request origin, query param, or environment variable
+    // This ensures the callback redirects to the correct frontend URL
+    const frontendUrl = req.query.frontend_url || 
+                       (req.headers.origin ? req.headers.origin.replace(/\/$/, '') : null) ||
+                       process.env.FRONTEND_URL ||
+                       'http://localhost:3000';
 
-    const authUrl = await generateGoogleAuthUrl(user_id, email, username);
+    const authUrl = await generateGoogleAuthUrl(user_id, email, username, frontendUrl);
     
     // Return URL as JSON
     res.json({ authUrl });
@@ -117,7 +131,30 @@ router.get('/google/callback', async (req, res) => {
       return res.status(400).json({ error: 'State parameter is required' });
     }
 
-    const user_id = state; // user_id was passed in state
+    // Parse state to get user_id and frontend_url
+    let user_id;
+    let frontendUrl;
+    
+    try {
+      // Try to decode as base64 JSON (new format)
+      const decodedState = Buffer.from(state, 'base64').toString('utf-8');
+      const stateData = JSON.parse(decodedState);
+      user_id = stateData.user_id;
+      frontendUrl = stateData.frontend_url;
+    } catch (parseError) {
+      // Fallback: if state is not JSON, treat it as plain user_id (backwards compatibility)
+      user_id = state;
+      frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    }
+
+    if (!user_id) {
+      return res.status(400).json({ error: 'Invalid state parameter' });
+    }
+
+    // Ensure frontend URL has a default
+    if (!frontendUrl) {
+      frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    }
     
     // Find or create user (should exist from step 1, but create if needed)
     const [user] = await User.findOrCreate({
@@ -141,13 +178,21 @@ router.get('/google/callback', async (req, res) => {
       google_calendar_enabled: true,
     });
 
-    // Redirect to frontend success page
-    // In production, you might want to redirect to a specific page
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    // Redirect to frontend success page using the frontend URL from state
     res.redirect(`${frontendUrl}/userProfile/?google_calendar=connected`);
   } catch (error) {
     console.error('Error handling Google OAuth callback:', error.message);
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    // Try to get frontend URL from state, fallback to env or localhost
+    let frontendUrl = 'http://localhost:3000';
+    try {
+      if (req.query.state) {
+        const decodedState = Buffer.from(req.query.state, 'base64').toString('utf-8');
+        const stateData = JSON.parse(decodedState);
+        frontendUrl = stateData.frontend_url || process.env.FRONTEND_URL || 'http://localhost:3000';
+      }
+    } catch (e) {
+      frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    }
     res.redirect(`${frontendUrl}/userProfile/?google_calendar=error&message=${encodeURIComponent(error.message)}`);
   }
 });
