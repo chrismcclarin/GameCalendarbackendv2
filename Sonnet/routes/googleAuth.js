@@ -51,11 +51,14 @@ const generateGoogleAuthUrl = async (user_id, email = null, username = null, fro
   ];
   
   // Encode state with user_id and frontend URL (so callback knows where to redirect)
+  // Use URL-safe base64 encoding to avoid issues with special characters in query strings
   const stateData = {
     user_id: user_id,
     frontend_url: frontendUrl || process.env.FRONTEND_URL || 'http://localhost:3000'
   };
-  const state = Buffer.from(JSON.stringify(stateData)).toString('base64');
+  const base64State = Buffer.from(JSON.stringify(stateData)).toString('base64');
+  // Make base64 URL-safe by replacing + with -, / with _, and removing padding =
+  const state = base64State.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
   
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: 'offline', // Required to get refresh token
@@ -123,6 +126,10 @@ router.get('/google/callback', async (req, res) => {
   try {
     const { code, state } = req.query;
     
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('Google OAuth callback received. State:', state ? 'present' : 'missing', 'Code:', code ? 'present' : 'missing');
+    }
+    
     if (!code) {
       return res.status(400).json({ error: 'Authorization code is required' });
     }
@@ -136,19 +143,38 @@ router.get('/google/callback', async (req, res) => {
     let frontendUrl;
     
     try {
-      // Try to decode as base64 JSON (new format)
-      const decodedState = Buffer.from(state, 'base64').toString('utf-8');
-      const stateData = JSON.parse(decodedState);
+      // Decode URL-safe base64: restore +, /, and padding = first
+      // Express automatically URL-decodes query params, but we need to restore base64 characters
+      const base64State = state.replace(/-/g, '+').replace(/_/g, '/');
+      // Add padding if needed (base64 strings should be multiple of 4)
+      const padding = base64State.length % 4;
+      const paddedState = base64State + (padding ? '='.repeat(4 - padding) : '');
+      
+      // Decode base64 to get JSON string
+      const jsonString = Buffer.from(paddedState, 'base64').toString('utf-8');
+      const stateData = JSON.parse(jsonString);
       user_id = stateData.user_id;
       frontendUrl = stateData.frontend_url;
+      
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(`Successfully decoded state. User ID: ${user_id}, Frontend URL: ${frontendUrl}`);
+      }
     } catch (parseError) {
+      console.warn('Failed to decode state as base64 JSON, trying fallback:', parseError.message);
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn('State value received:', state);
+      }
       // Fallback: if state is not JSON, treat it as plain user_id (backwards compatibility)
       user_id = state;
       frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(`Using fallback. User ID: ${user_id}, Frontend URL: ${frontendUrl}`);
+      }
     }
 
     if (!user_id) {
-      return res.status(400).json({ error: 'Invalid state parameter' });
+      console.error('No user_id found in state parameter');
+      return res.status(400).json({ error: 'Invalid state parameter: missing user_id' });
     }
 
     // Ensure frontend URL has a default
@@ -156,8 +182,12 @@ router.get('/google/callback', async (req, res) => {
       frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     }
     
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`Looking up user with ID: ${user_id}`);
+    }
+    
     // Find or create user (should exist from step 1, but create if needed)
-    const [user] = await User.findOrCreate({
+    const [user, created] = await User.findOrCreate({
       where: { user_id },
       defaults: {
         user_id,
@@ -165,11 +195,27 @@ router.get('/google/callback', async (req, res) => {
         email: null,
       }
     });
+    
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`User found/created: ${created ? 'created' : 'found'}, ID: ${user.id}`);
+    }
 
     const oauth2Client = getOAuth2Client();
     
     // Exchange authorization code for tokens
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('Exchanging authorization code for tokens...');
+    }
     const { tokens } = await oauth2Client.getToken(code);
+    
+    if (!tokens.access_token) {
+      console.error('No access token received from Google');
+      throw new Error('Failed to get access token from Google');
+    }
+    
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('Tokens received. Access token present:', !!tokens.access_token, 'Refresh token present:', !!tokens.refresh_token);
+    }
     
     // Store tokens in database
     await user.update({
@@ -178,7 +224,14 @@ router.get('/google/callback', async (req, res) => {
       google_calendar_enabled: true,
     });
 
+    // Reload user to verify update
+    await user.reload();
+    console.log(`Google Calendar connected for user ${user_id}. Enabled: ${user.google_calendar_enabled}, Has Token: ${!!user.google_calendar_token}, Has Refresh Token: ${!!user.google_calendar_refresh_token}`);
+
     // Redirect to frontend success page using the frontend URL from state
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`Redirecting to: ${frontendUrl}/userProfile/?google_calendar=connected`);
+    }
     res.redirect(`${frontendUrl}/userProfile/?google_calendar=connected`);
   } catch (error) {
     console.error('Error handling Google OAuth callback:', error.message);
@@ -239,19 +292,26 @@ router.get('/google/status/:user_id', async (req, res) => {
       return res.status(403).json({ error: 'Forbidden: Cannot access other users\' calendar status' });
     }
     
-    // Find or create user (auto-create if doesn't exist)
-    const [user] = await User.findOrCreate({
+    // Find user (don't auto-create, just return status)
+    const user = await User.findOne({
       where: { user_id: verified_user_id },
-      defaults: {
-        user_id: verified_user_id,
-        username: 'User',
-        email: null,
-      },
-      attributes: ['id', 'google_calendar_enabled']
+      attributes: ['id', 'google_calendar_enabled', 'google_calendar_token']
     });
 
+    // If user doesn't exist, they're not connected
+    if (!user) {
+      return res.json({ connected: false });
+    }
+
+    // Check if calendar is enabled AND has a token (both required for "connected")
+    const isConnected = !!(user.google_calendar_enabled && user.google_calendar_token);
+    
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`Google Calendar status for user ${verified_user_id}: enabled=${user.google_calendar_enabled}, hasToken=${!!user.google_calendar_token}, connected=${isConnected}`);
+    }
+    
     res.json({ 
-      connected: user.google_calendar_enabled || false 
+      connected: isConnected
     });
   } catch (error) {
     console.error('Error getting Google Calendar status:', error.message);
