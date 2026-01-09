@@ -7,11 +7,19 @@ const router = express.Router();
 
 // Initialize OAuth2 client
 const getOAuth2Client = () => {
-  return new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
-    process.env.GOOGLE_REDIRECT_URI || 'http://localhost:4000/api/auth/google/callback'
-  );
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:4000/api/auth/google/callback';
+  
+  if (!clientId) {
+    throw new Error('GOOGLE_CLIENT_ID environment variable is not set');
+  }
+  
+  if (!clientSecret) {
+    throw new Error('GOOGLE_CLIENT_SECRET environment variable is not set');
+  }
+  
+  return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 };
 
 // Helper function to generate Google OAuth URL

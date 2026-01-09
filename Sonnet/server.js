@@ -108,25 +108,42 @@ if (process.env.ALLOWED_ORIGINS) {
   allowedOrigins.push(...process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim()));
 }
 
+// Log allowed origins on startup (helpful for debugging)
+console.log('CORS allowed origins:', allowedOrigins.length > 0 ? allowedOrigins.join(', ') : 'None configured');
+if (allowedOrigins.length === 0 && process.env.NODE_ENV === 'production') {
+  console.warn('WARNING: No CORS origins configured! Set FRONTEND_URL or ALLOWED_ORIGINS environment variable.');
+}
+
 app.use(cors({
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps, Postman, etc.) in development
+    // Allow requests with no origin in development
     if (!origin && process.env.NODE_ENV !== 'production') {
       return callback(null, true);
     }
     
     // Check if origin is in allowed list
-    if (allowedOrigins.includes(origin)) {
+    if (origin && allowedOrigins.includes(origin)) {
       callback(null, true);
+      return;
+    }
+    
+    // In production, allow requests with no origin ONLY for server-to-server requests
+    // These come from Next.js API routes which authenticate via Authorization header
+    // NOTE: We validate Authorization header in separate middleware after CORS
+    // CORS is primarily a browser security feature; server-to-server requests rely on auth
+    if (!origin && process.env.NODE_ENV === 'production') {
+      // Allow through CORS - auth middleware will enforce authentication on protected routes
+      return callback(null, true);
+    }
+    
+    // Block unallowed origins in production
+    if (process.env.NODE_ENV === 'production') {
+      console.warn(`CORS: Blocked request from origin: ${origin || 'undefined'}`);
+      console.warn(`Allowed origins: ${allowedOrigins.join(', ')}`);
+      callback(new Error('Not allowed by CORS'));
     } else {
-      // In production, be strict about origins
-      if (process.env.NODE_ENV === 'production') {
-        console.warn(`CORS: Blocked request from origin: ${origin}`);
-        callback(new Error('Not allowed by CORS'));
-      } else {
-        // In development, allow any origin
-        callback(null, true);
-      }
+      // In development, allow any origin
+      callback(null, true);
     }
   },
   credentials: true,
@@ -134,6 +151,53 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
   exposedHeaders: ['Content-Range', 'X-Content-Range'],
 }));
+
+// Security validation: Require Authorization header for no-origin requests to protected routes
+// This ensures server-to-server requests are authenticated
+app.use((req, res, next) => {
+  const hasOrigin = req.headers.origin;
+  const hasAuth = !!req.headers.authorization;
+  
+  // Define protected routes (routes that require authentication)
+  const protectedRoutes = [
+    '/api/auth/google/url', // Google auth URL generation (requires auth)
+    '/api/auth/google/disconnect', // Google disconnect (requires auth)
+    '/api/auth/google/refresh', // Token refresh (requires auth)
+    '/api/users',
+    '/api/groups',
+    '/api/events',
+    '/api/availability',
+    '/api/lists',
+    '/api/game-reviews',
+    '/api/user-games',
+  ];
+  
+  // Exclude public routes that don't require auth
+  const publicRoutes = [
+    '/api/auth/google/callback', // Google OAuth callback (public - Google redirects to it)
+    '/api/games', // Game search is public
+    '/api/feedback', // Feedback is public (or optional auth)
+    '/health', // Health check is public
+  ];
+  
+  const isProtectedRoute = protectedRoutes.some(route => req.path.startsWith(route));
+  const isPublicRoute = publicRoutes.some(route => req.path === route || req.path.startsWith(route));
+  
+  // In production, block no-origin requests to protected routes without Authorization header
+  // This prevents unauthorized server-to-server requests
+  // Public routes (like Google callback) are exempt from this check
+  if (!hasOrigin && process.env.NODE_ENV === 'production' && isProtectedRoute && !isPublicRoute && !hasAuth) {
+    console.warn(`SECURITY: Blocked no-origin request without Authorization to protected route: ${req.method} ${req.path} from IP: ${req.ip}`);
+    return res.status(401).json({ error: 'Unauthorized: Server-to-server requests require authentication' });
+  }
+  
+  // Log no-origin requests with auth for monitoring (these are legitimate server-to-server)
+  if (!hasOrigin && hasAuth && process.env.NODE_ENV === 'production') {
+    console.log(`Server-to-server authenticated request: ${req.method} ${req.path}`);
+  }
+  
+  next();
+});
 
 // 3. Request body parsing with size limit
 app.use(express.json({ limit: '10mb' })); // Limit request body size
