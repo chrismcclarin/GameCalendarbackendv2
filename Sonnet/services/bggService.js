@@ -36,21 +36,73 @@ class BGGService {
   }
 
 
-  async getGameById(bggId) {
+  async getGameById(bggId, type = null) {
     try {
-      const response = await axios.get(`${this.baseURL}/thing`, {
-        params: {
-          id: bggId,
-          type: 'boardgame'
-        },
-        headers: this.getHeaders(),
-        timeout: 15000,
-        maxRedirects: 5
-      });
+      // BGG thing API can handle both boardgame and boardgameexpansion
+      // If type is specified, use it; otherwise default to boardgame
+      // If it fails, we'll try the other type as fallback
+      const gameType = type === 'boardgameexpansion' ? 'boardgameexpansion' : 'boardgame';
+      
+      let response;
+      let parsedResult;
+      
+      try {
+        response = await axios.get(`${this.baseURL}/thing`, {
+          params: {
+            id: bggId,
+            type: gameType
+          },
+          headers: this.getHeaders(),
+          timeout: 15000,
+          maxRedirects: 5
+        });
+        
+        parsedResult = await this.parser.parseStringPromise(response.data);
+        
+        // Check if we got valid data
+        if (!parsedResult.items || !parsedResult.items.item || parsedResult.items.item.length === 0) {
+          // No items found with this type, try the other type if we tried boardgame first
+          if (gameType === 'boardgame') {
+            response = await axios.get(`${this.baseURL}/thing`, {
+              params: {
+                id: bggId,
+                type: 'boardgameexpansion'
+              },
+              headers: this.getHeaders(),
+              timeout: 15000,
+              maxRedirects: 5
+            });
+            parsedResult = await this.parser.parseStringPromise(response.data);
+          }
+        }
+      } catch (firstError) {
+        // If first attempt fails and we tried boardgame, try boardgameexpansion as fallback
+        if (gameType === 'boardgame') {
+          try {
+            response = await axios.get(`${this.baseURL}/thing`, {
+              params: {
+                id: bggId,
+                type: 'boardgameexpansion'
+              },
+              headers: this.getHeaders(),
+              timeout: 15000,
+              maxRedirects: 5
+            });
+            parsedResult = await this.parser.parseStringPromise(response.data);
+          } catch (secondError) {
+            throw firstError; // Throw the original error
+          }
+        } else {
+          throw firstError;
+        }
+      }
 
-
-      const result = await this.parser.parseStringPromise(response.data);
-      const item = result.items.item[0];
+      // Use the parsed result we already have
+      if (!parsedResult || !parsedResult.items || !parsedResult.items.item || parsedResult.items.item.length === 0) {
+        throw new Error(`No game data found for BGG ID ${bggId}`);
+      }
+      
+      const item = Array.isArray(parsedResult.items.item) ? parsedResult.items.item[0] : parsedResult.items.item;
 
 
       return {
@@ -158,10 +210,10 @@ class BGGService {
    * BGG API returns 202 (Accepted) when processing the request, then 200 when ready
    * We need to poll until we get a 200 response
    * @param {string} bggUsername - BGG username
-   * @param {string} subtype - Collection subtype: 'boardgame', 'boardgameexpansion', etc. (optional)
-   * @returns {Promise<Array>} Array of collection items
+   * @param {string} subtype - Collection subtype: 'boardgame', 'boardgameexpansion', or null/undefined for all types (optional)
+   * @returns {Promise<Array>} Array of collection items with subtype information
    */
-  async getUserCollection(bggUsername, subtype = 'boardgame') {
+  async getUserCollection(bggUsername, subtype = null) {
     try {
       // Rate limiting: ensure minimum time between requests
       const now = Date.now();
@@ -175,9 +227,14 @@ class BGGService {
       const collectionUrl = `${this.baseURL}/collection`;
       const params = {
         username: bggUsername,
-        subtype: subtype, // 'boardgame' for base games, 'boardgameexpansion' for expansions
         own: 1, // Only get games they own
       };
+      
+      // Only include subtype parameter if specified (omit to get all types)
+      // If subtype is not specified, BGG API returns all collection items (boardgames, expansions, etc.)
+      if (subtype) {
+        params.subtype = subtype;
+      }
 
       // BGG API returns 202 when processing, 200 when ready
       // We need to poll until we get 200
@@ -242,7 +299,7 @@ class BGGService {
       }
 
       const items = Array.isArray(result.items.item) ? result.items.item : [result.items.item];
-      console.log(`BGG collection: Found ${items.length} games for user`);
+      console.log(`BGG collection: Found ${items.length} items for user`);
       
       return items.map(item => {
         try {
@@ -263,6 +320,17 @@ class BGGService {
             return null;
           }
           
+          // Determine subtype from item attributes or use provided subtype
+          // BGG collection XML might include objecttype or subtype in the item attributes
+          let itemSubtype = subtype;
+          if (!itemSubtype && item.$ && item.$.subtype) {
+            itemSubtype = item.$.subtype;
+          } else if (!itemSubtype && item.$ && item.$.objecttype) {
+            // Object type might indicate if it's an expansion
+            itemSubtype = item.$.objecttype === 'boardgameexpansion' ? 'boardgameexpansion' : 'boardgame';
+          }
+          // Default to 'boardgame' if no subtype can be determined (will be handled by fallback in getGameById)
+          
           return {
             bgg_id: bgg_id,
             name: this.extractValue(item.name) || 'Unknown Game',
@@ -270,6 +338,7 @@ class BGGService {
             // Collection-specific data
             numplays: parseInt(this.extractValue(item.numplays)) || 0,
             rating: rating,
+            subtype: itemSubtype || 'boardgame', // Include subtype so we know if it's an expansion
           };
         } catch (itemError) {
           console.error('Error parsing collection item:', itemError, 'Item:', item);

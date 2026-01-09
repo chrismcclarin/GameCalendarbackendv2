@@ -129,11 +129,21 @@ router.post('/user/:user_id/import-bgg-collection', validateAuth0UserId('user_id
       console.log(`Starting BGG collection import for BGG username: ${bgg_username.trim()}`);
     }
     
-    // Fetch collection from BGG
-    let collection;
+    // Fetch collection from BGG - make parallel calls for both base games and expansions (more efficient than sequential)
+    let collection = [];
     try {
-      collection = await bggService.getUserCollection(bgg_username.trim());
-      console.log(`BGG collection fetched: ${collection.length} games found`);
+      // Make both API calls in parallel instead of sequentially for better performance
+      const [baseGames, expansions] = await Promise.all([
+        bggService.getUserCollection(bgg_username.trim(), 'boardgame'),
+        bggService.getUserCollection(bgg_username.trim(), 'boardgameexpansion')
+      ]);
+      
+      console.log(`BGG base games fetched: ${baseGames.length} games found`);
+      console.log(`BGG expansions fetched: ${expansions.length} expansions found`);
+      
+      // Merge both collections
+      collection = [...baseGames, ...expansions];
+      console.log(`BGG collection total: ${collection.length} items (${baseGames.length} games + ${expansions.length} expansions)`);
     } catch (bggError) {
       console.error('Error fetching BGG collection:', bggError.message);
       return res.status(500).json({ 
@@ -162,7 +172,8 @@ router.post('/user/:user_id/import-bgg-collection', validateAuth0UserId('user_id
         
         if (!game) {
           // Game doesn't exist, fetch full details from BGG and create it
-          const gameData = await bggService.getGameById(item.bgg_id);
+          // Use the subtype from the collection item (if available) to fetch the correct type
+          const gameData = await bggService.getGameById(item.bgg_id, item.subtype || 'boardgame');
           game = await Game.create({
             bgg_id: item.bgg_id,
             name: gameData.name,
