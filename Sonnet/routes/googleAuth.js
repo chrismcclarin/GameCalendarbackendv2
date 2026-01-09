@@ -9,7 +9,22 @@ const router = express.Router();
 const getOAuth2Client = () => {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const redirectUri = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:4000/api/auth/google/callback';
+  
+  // Determine redirect URI - check env var, or construct from Railway domain, or use localhost default
+  let redirectUri = process.env.GOOGLE_REDIRECT_URI;
+  
+  if (!redirectUri) {
+    // Try to construct from Railway environment (Railway provides RAILWAY_PUBLIC_DOMAIN)
+    if (process.env.RAILWAY_PUBLIC_DOMAIN) {
+      redirectUri = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}/api/auth/google/callback`;
+    } else if (process.env.NODE_ENV === 'production') {
+      // In production without explicit redirect URI and no Railway domain, throw error
+      throw new Error('GOOGLE_REDIRECT_URI environment variable is required in production. Set it to your production backend URL (e.g., https://your-backend.railway.app/api/auth/google/callback)');
+    } else {
+      // Development: use localhost default
+      redirectUri = 'http://localhost:4000/api/auth/google/callback';
+    }
+  }
   
   if (!clientId) {
     throw new Error('GOOGLE_CLIENT_ID environment variable is not set');
@@ -89,7 +104,7 @@ router.get('/google/url', async (req, res) => {
                        (req.headers.origin ? req.headers.origin.replace(/\/$/, '') : null) ||
                        process.env.FRONTEND_URL ||
                        'http://localhost:3000';
-
+    
     const authUrl = await generateGoogleAuthUrl(user_id, email, username, frontendUrl);
     
     // Return URL as JSON
@@ -126,10 +141,6 @@ router.get('/google/callback', async (req, res) => {
   try {
     const { code, state } = req.query;
     
-    if (process.env.NODE_ENV !== 'production') {
-      console.log('Google OAuth callback received. State:', state ? 'present' : 'missing', 'Code:', code ? 'present' : 'missing');
-    }
-    
     if (!code) {
       return res.status(400).json({ error: 'Authorization code is required' });
     }
@@ -155,21 +166,10 @@ router.get('/google/callback', async (req, res) => {
       const stateData = JSON.parse(jsonString);
       user_id = stateData.user_id;
       frontendUrl = stateData.frontend_url;
-      
-      if (process.env.NODE_ENV !== 'production') {
-        console.log(`Successfully decoded state. User ID: ${user_id}, Frontend URL: ${frontendUrl}`);
-      }
     } catch (parseError) {
-      console.warn('Failed to decode state as base64 JSON, trying fallback:', parseError.message);
-      if (process.env.NODE_ENV !== 'production') {
-        console.warn('State value received:', state);
-      }
       // Fallback: if state is not JSON, treat it as plain user_id (backwards compatibility)
       user_id = state;
       frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-      if (process.env.NODE_ENV !== 'production') {
-        console.log(`Using fallback. User ID: ${user_id}, Frontend URL: ${frontendUrl}`);
-      }
     }
 
     if (!user_id) {
@@ -182,12 +182,8 @@ router.get('/google/callback', async (req, res) => {
       frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     }
     
-    if (process.env.NODE_ENV !== 'production') {
-      console.log(`Looking up user with ID: ${user_id}`);
-    }
-    
     // Find or create user (should exist from step 1, but create if needed)
-    const [user, created] = await User.findOrCreate({
+    const [user] = await User.findOrCreate({
       where: { user_id },
       defaults: {
         user_id,
@@ -195,17 +191,10 @@ router.get('/google/callback', async (req, res) => {
         email: null,
       }
     });
-    
-    if (process.env.NODE_ENV !== 'production') {
-      console.log(`User found/created: ${created ? 'created' : 'found'}, ID: ${user.id}`);
-    }
 
     const oauth2Client = getOAuth2Client();
     
     // Exchange authorization code for tokens
-    if (process.env.NODE_ENV !== 'production') {
-      console.log('Exchanging authorization code for tokens...');
-    }
     const { tokens } = await oauth2Client.getToken(code);
     
     if (!tokens.access_token) {
@@ -213,25 +202,21 @@ router.get('/google/callback', async (req, res) => {
       throw new Error('Failed to get access token from Google');
     }
     
-    if (process.env.NODE_ENV !== 'production') {
-      console.log('Tokens received. Access token present:', !!tokens.access_token, 'Refresh token present:', !!tokens.refresh_token);
+    // Store tokens in database
+    // Note: Refresh token might be null if user already granted permission (Google reuses existing consent)
+    const updateData = {
+      google_calendar_token: tokens.access_token,
+      google_calendar_enabled: true,
+    };
+    
+    // Only update refresh token if we received one (if null, keep existing refresh token)
+    if (tokens.refresh_token) {
+      updateData.google_calendar_refresh_token = tokens.refresh_token;
     }
     
-    // Store tokens in database
-    await user.update({
-      google_calendar_token: tokens.access_token,
-      google_calendar_refresh_token: tokens.refresh_token,
-      google_calendar_enabled: true,
-    });
-
-    // Reload user to verify update
-    await user.reload();
-    console.log(`Google Calendar connected for user ${user_id}. Enabled: ${user.google_calendar_enabled}, Has Token: ${!!user.google_calendar_token}, Has Refresh Token: ${!!user.google_calendar_refresh_token}`);
+    await user.update(updateData);
 
     // Redirect to frontend success page using the frontend URL from state
-    if (process.env.NODE_ENV !== 'production') {
-      console.log(`Redirecting to: ${frontendUrl}/userProfile/?google_calendar=connected`);
-    }
     res.redirect(`${frontendUrl}/userProfile/?google_calendar=connected`);
   } catch (error) {
     console.error('Error handling Google OAuth callback:', error.message);
@@ -295,7 +280,7 @@ router.get('/google/status/:user_id', async (req, res) => {
     // Find user (don't auto-create, just return status)
     const user = await User.findOne({
       where: { user_id: verified_user_id },
-      attributes: ['id', 'google_calendar_enabled', 'google_calendar_token']
+      attributes: ['google_calendar_enabled', 'google_calendar_token']
     });
 
     // If user doesn't exist, they're not connected
@@ -305,10 +290,6 @@ router.get('/google/status/:user_id', async (req, res) => {
 
     // Check if calendar is enabled AND has a token (both required for "connected")
     const isConnected = !!(user.google_calendar_enabled && user.google_calendar_token);
-    
-    if (process.env.NODE_ENV !== 'production') {
-      console.log(`Google Calendar status for user ${verified_user_id}: enabled=${user.google_calendar_enabled}, hasToken=${!!user.google_calendar_token}, connected=${isConnected}`);
-    }
     
     res.json({ 
       connected: isConnected

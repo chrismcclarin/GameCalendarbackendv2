@@ -5,6 +5,60 @@
 
 const { google } = require('googleapis');
 
+// Helper function to get Google OAuth redirect URI (same logic as routes/googleAuth.js)
+function getGoogleRedirectUri() {
+  let redirectUri = process.env.GOOGLE_REDIRECT_URI;
+  
+  if (!redirectUri) {
+    // Try to construct from Railway environment (Railway provides RAILWAY_PUBLIC_DOMAIN)
+    if (process.env.RAILWAY_PUBLIC_DOMAIN) {
+      redirectUri = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}/api/auth/google/callback`;
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new Error('GOOGLE_REDIRECT_URI environment variable is required in production. Set it to your production backend URL (e.g., https://your-backend.railway.app/api/auth/google/callback)');
+    } else {
+      // Development: use localhost default
+      redirectUri = 'http://localhost:4000/api/auth/google/callback';
+    }
+  }
+  
+  return redirectUri;
+}
+
+// Helper function to format date and time in a specific timezone
+function formatDateAndTimeInTimezone(date, timezone = 'UTC') {
+  try {
+    // Format date (YYYY-MM-DD) in the specified timezone
+    const dateFormatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    const dateStr = dateFormatter.format(date);
+    
+    // Format time (HH:MM) in the specified timezone
+    const timeFormatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+    const timeParts = timeFormatter.formatToParts(date);
+    const hour = timeParts.find(p => p.type === 'hour').value;
+    const minute = timeParts.find(p => p.type === 'minute').value;
+    const timeStr = `${hour.padStart(2, '0')}:${minute.padStart(2, '0')}`;
+    
+    return { date: dateStr, time: timeStr };
+  } catch (error) {
+    // Fallback to UTC if timezone is invalid
+    console.error(`Invalid timezone ${timezone}, falling back to UTC:`, error.message);
+    const dateStr = date.toISOString().split('T')[0];
+    const hours = String(date.getUTCHours()).padStart(2, '0');
+    const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+    return { date: dateStr, time: `${hours}:${minutes}` };
+  }
+}
+
 class GoogleCalendarService {
   /**
    * Check if event is in the future (only future events should be added to calendars)
@@ -23,7 +77,7 @@ class GoogleCalendarService {
       const oauth2Client = new google.auth.OAuth2(
         process.env.GOOGLE_CLIENT_ID,
         process.env.GOOGLE_CLIENT_SECRET,
-        process.env.GOOGLE_REDIRECT_URI || 'http://localhost:4000/api/auth/google/callback'
+        getGoogleRedirectUri()
       );
 
       oauth2Client.setCredentials({
@@ -55,7 +109,7 @@ class GoogleCalendarService {
       const oauth2Client = new google.auth.OAuth2(
         process.env.GOOGLE_CLIENT_ID,
         process.env.GOOGLE_CLIENT_SECRET,
-        process.env.GOOGLE_REDIRECT_URI || 'http://localhost:4000/api/auth/google/callback'
+        getGoogleRedirectUri()
       );
 
       oauth2Client.setCredentials({
@@ -65,19 +119,55 @@ class GoogleCalendarService {
 
       const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
       
-      const startDate = new Date(eventData.start_date);
-      const endDate = new Date(startDate.getTime() + (eventData.duration_minutes || 60) * 60 * 1000);
+      // eventData.start_date should be in UTC (ISO string from database)
+      // eventData.timezone should be the user's timezone (e.g., 'America/Los_Angeles')
+      // We need to convert from UTC to the user's local time for Google Calendar
+      const startDateUTC = new Date(eventData.start_date);
+      const endDateUTC = new Date(startDateUTC.getTime() + (eventData.duration_minutes || 60) * 60 * 1000);
+      
+      // Use the timezone from eventData if provided, otherwise fall back to UTC
+      // The timezone should be the user's local timezone, not the server's
+      const eventTimezone = eventData.timezone || 'UTC';
+      
+      // Convert UTC dates to local time strings in the user's timezone
+      // Google Calendar API expects dateTime as "YYYY-MM-DDTHH:mm:ss" (no timezone indicator)
+      // and timeZone as the IANA timezone name
+      const formatDateTimeForTimezone = (dateUTC, timezone) => {
+        // Create a date formatter for the specified timezone
+        const formatter = new Intl.DateTimeFormat('en-US', {
+          timeZone: timezone,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false
+        });
+        
+        // FormatToParts gives us structured parts
+        const parts = formatter.formatToParts(dateUTC);
+        const year = parts.find(p => p.type === 'year').value;
+        const month = parts.find(p => p.type === 'month').value;
+        const day = parts.find(p => p.type === 'day').value;
+        const hour = parts.find(p => p.type === 'hour').value.padStart(2, '0');
+        const minute = parts.find(p => p.type === 'minute').value.padStart(2, '0');
+        const second = parts.find(p => p.type === 'second').value.padStart(2, '0');
+        
+        // Return in ISO format without timezone: "YYYY-MM-DDTHH:mm:ss"
+        return `${year}-${month}-${day}T${hour}:${minute}:${second}`;
+      };
 
       const calendarEvent = {
         summary: eventData.game_name ? `Board Game: ${eventData.game_name}` : 'Board Game Session',
         description: eventData.comments || `Game session with ${participantEmails.length} players`,
         start: {
-          dateTime: startDate.toISOString(),
-          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+          dateTime: formatDateTimeForTimezone(startDateUTC, eventTimezone),
+          timeZone: eventTimezone,
         },
         end: {
-          dateTime: endDate.toISOString(),
-          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+          dateTime: formatDateTimeForTimezone(endDateUTC, eventTimezone),
+          timeZone: eventTimezone,
         },
         attendees: participantEmails.map(email => ({ email })),
         sendUpdates: 'all', // Send invitations to all attendees
@@ -103,7 +193,7 @@ class GoogleCalendarService {
           const oauth2Client = new google.auth.OAuth2(
             process.env.GOOGLE_CLIENT_ID,
             process.env.GOOGLE_CLIENT_SECRET,
-            process.env.GOOGLE_REDIRECT_URI || 'http://localhost:4000/api/auth/google/callback'
+            getGoogleRedirectUri()
           );
           oauth2Client.setCredentials({
             access_token: newAccessToken,
@@ -230,7 +320,7 @@ class GoogleCalendarService {
       const oauth2Client = new google.auth.OAuth2(
         process.env.GOOGLE_CLIENT_ID,
         process.env.GOOGLE_CLIENT_SECRET,
-        process.env.GOOGLE_REDIRECT_URI || 'http://localhost:4000/api/auth/google/callback'
+        getGoogleRedirectUri()
       );
 
       oauth2Client.setCredentials({
@@ -258,62 +348,138 @@ class GoogleCalendarService {
       const busyPeriods = freebusyResponse.data.calendars?.primary?.busy || [];
       
       // Convert busy periods to 30-minute time slots
+      // Google Calendar returns busy periods as ISO strings (RFC3339 format)
+      // These are always in UTC, so we need to properly convert to the user's timezone
       const busySlots = [];
       
       for (const period of busyPeriods) {
-        const periodStart = new Date(period.start);
-        const periodEnd = new Date(period.end);
+        // Parse the ISO string dates from Google Calendar (these are in UTC)
+        const periodStartUTC = new Date(period.start);
+        const periodEndUTC = new Date(period.end);
         
-        // Round start time down to nearest 30 minutes
-        const startMinutes = periodStart.getMinutes();
-        const roundedStartMinutes = Math.floor(startMinutes / 30) * 30;
-        const slotStart = new Date(periodStart);
-        slotStart.setMinutes(roundedStartMinutes, 0, 0);
+        // Get time components in the target timezone for rounding
+        const startFormatter = new Intl.DateTimeFormat('en-US', {
+          timeZone: timezone,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+        });
         
-        // Round end time up to nearest 30 minutes
-        const endMinutes = periodEnd.getMinutes();
-        const roundedEndMinutes = Math.ceil(endMinutes / 30) * 30;
-        const slotEnd = new Date(periodEnd);
-        if (roundedEndMinutes === 60) {
-          slotEnd.setHours(slotEnd.getHours() + 1);
-          slotEnd.setMinutes(0, 0, 0);
-        } else {
-          slotEnd.setMinutes(roundedEndMinutes, 0, 0);
+        // Get the local time representation in the target timezone
+        // We'll use this to determine what time it "appears" to be in that timezone
+        const startParts = startFormatter.formatToParts(periodStartUTC);
+        const startYear = parseInt(startParts.find(p => p.type === 'year').value);
+        const startMonth = parseInt(startParts.find(p => p.type === 'month').value) - 1; // Month is 0-indexed
+        const startDay = parseInt(startParts.find(p => p.type === 'day').value);
+        const startHour = parseInt(startParts.find(p => p.type === 'hour').value);
+        const startMinute = parseInt(startParts.find(p => p.type === 'minute').value);
+        
+        const endParts = startFormatter.formatToParts(periodEndUTC);
+        const endYear = parseInt(endParts.find(p => p.type === 'year').value);
+        const endMonth = parseInt(endParts.find(p => p.type === 'month').value) - 1;
+        const endDay = parseInt(endParts.find(p => p.type === 'day').value);
+        const endHour = parseInt(endParts.find(p => p.type === 'hour').value);
+        const endMinute = parseInt(endParts.find(p => p.type === 'minute').value);
+        
+        // Round start time down to nearest 30 minutes in the target timezone
+        const roundedStartMinute = Math.floor(startMinute / 30) * 30;
+        let slotStartHour = startHour;
+        let slotStartMinute = roundedStartMinute;
+        let slotStartYear = startYear;
+        let slotStartMonth = startMonth;
+        let slotStartDay = startDay;
+        
+        // Round end time up to nearest 30 minutes in the target timezone
+        const roundedEndMinute = Math.ceil(endMinute / 30) * 30;
+        let slotEndHour = endHour;
+        let slotEndMinute = roundedEndMinute;
+        let slotEndYear = endYear;
+        let slotEndMonth = endMonth;
+        let slotEndDay = endDay;
+        
+        if (roundedEndMinute === 60) {
+          slotEndHour = (slotEndHour + 1) % 24;
+          slotEndMinute = 0;
+          if (slotEndHour === 0) {
+            // Roll over to next day
+            const daysInMonth = new Date(slotEndYear, slotEndMonth + 1, 0).getDate();
+            slotEndDay++;
+            if (slotEndDay > daysInMonth) {
+              slotEndDay = 1;
+              slotEndMonth++;
+              if (slotEndMonth > 11) {
+                slotEndMonth = 0;
+                slotEndYear++;
+              }
+            }
+          }
         }
         
-        // Generate 30-minute slots
-        let currentSlot = new Date(slotStart);
-        const maxSlots = 10000; // Safety limit: maximum 10,000 slots per busy period
+        // Generate 30-minute slots in the target timezone
+        // We'll iterate using the timezone-aware components
+        let currentYear = slotStartYear;
+        let currentMonth = slotStartMonth;
+        let currentDay = slotStartDay;
+        let currentHour = slotStartHour;
+        let currentMinute = slotStartMinute;
+        
+        const maxSlots = 10000; // Safety limit
         let slotCount = 0;
         
-        while (currentSlot < slotEnd) {
-          // Safety check to prevent infinite loops
+        while (
+          currentYear < slotEndYear ||
+          (currentYear === slotEndYear && currentMonth < slotEndMonth) ||
+          (currentYear === slotEndYear && currentMonth === slotEndMonth && currentDay < slotEndDay) ||
+          (currentYear === slotEndYear && currentMonth === slotEndMonth && currentDay === slotEndDay && 
+           (currentHour < slotEndHour || (currentHour === slotEndHour && currentMinute < slotEndMinute)))
+        ) {
+          // Safety check
           if (slotCount++ > maxSlots) {
             console.error('Safety limit reached in getBusyTimesForDateRange. Stopping to prevent infinite loop.');
             break;
           }
           
-          const nextSlot = new Date(currentSlot.getTime() + 30 * 60 * 1000);
+          // Format current slot in the target timezone
+          const dateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(currentDay).padStart(2, '0')}`;
+          const startTimeStr = `${String(currentHour).padStart(2, '0')}:${String(currentMinute).padStart(2, '0')}`;
           
-          // Format as date and time strings
-          const dateStr = currentSlot.toISOString().split('T')[0];
-          const timeStr = currentSlot.toTimeString().slice(0, 5); // HH:MM format
-          const endTimeStr = nextSlot.toTimeString().slice(0, 5);
+          // Calculate next slot (30 minutes later)
+          let nextHour = currentHour;
+          let nextMinute = currentMinute + 30;
+          const didHourWrap = nextMinute >= 60;
+          if (didHourWrap) {
+            nextMinute = nextMinute - 60;
+            nextHour = (nextHour + 1) % 24;
+          }
+          const endTimeStr = `${String(nextHour).padStart(2, '0')}:${String(nextMinute).padStart(2, '0')}`;
           
           busySlots.push({
             date: dateStr,
-            startTime: timeStr,
+            startTime: startTimeStr,
             endTime: endTimeStr,
           });
           
-          const previousTime = currentSlot.getTime();
-          currentSlot = nextSlot;
-          
-          // Safety check: ensure time actually advanced
-          if (currentSlot.getTime() === previousTime) {
-            console.error('Time did not advance in getBusyTimesForDateRange. Stopping to prevent infinite loop.');
-            break;
+          // Handle day/month/year rollover when hour wraps from 23 to 0 (midnight crossover)
+          if (didHourWrap && nextHour === 0) {
+            // Day has rolled over (we went from 23:xx to 0:xx)
+            const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+            currentDay++;
+            if (currentDay > daysInMonth) {
+              currentDay = 1;
+              currentMonth++;
+              if (currentMonth > 11) {
+                currentMonth = 0;
+                currentYear++;
+              }
+            }
           }
+          
+          // Advance to next slot
+          currentHour = nextHour;
+          currentMinute = nextMinute;
         }
       }
 

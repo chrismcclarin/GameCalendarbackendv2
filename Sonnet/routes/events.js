@@ -257,7 +257,8 @@ router.post('/', validateEventCreate, async (req, res) => {
       is_group_win,
       comments,
       participants, // Array of { user_id, score, faction, is_new_player, placement }
-      custom_participants // Array of { username, score, faction, is_new_player, placement }
+      custom_participants, // Array of { username, score, faction, is_new_player, placement }
+      timezone // User's timezone (e.g., 'America/Los_Angeles')
     } = req.body;
     
     const event = await Event.create({
@@ -329,7 +330,8 @@ router.post('/', validateEventCreate, async (req, res) => {
             start_date: start_date,
             duration_minutes: duration_minutes || 60,
             game_name: game?.name || 'Board Game',
-            comments: comments || ''
+            comments: comments || '',
+            timezone: timezone || 'UTC' // Use user's timezone, fallback to UTC
           };
           
           // Create calendar events for members with Google Calendar connected
