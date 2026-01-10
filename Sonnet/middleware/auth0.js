@@ -76,10 +76,13 @@ const verifyAuth0Token = (req, res, next) => {
 
       // Attach user info to request object
       // Extract all available user information from the token
+      // For email/password users: username field contains what they entered during signup
+      // For Google OAuth users: name field contains their Google name
       req.user = {
-        user_id: decoded.sub, // Auth0 user ID (sub claim)
+        user_id: decoded.sub, // Auth0 user ID (sub claim) - this proves they exist in Auth0
         email: decoded.email || decoded['https://your-api-identifier/email'], // Standard email or custom claim
         email_verified: decoded.email_verified || false,
+        username: decoded.username, // For email/password users, this is what they entered during signup
         name: decoded.name || decoded.nickname || decoded.given_name || decoded.family_name,
         nickname: decoded.nickname,
         picture: decoded.picture,

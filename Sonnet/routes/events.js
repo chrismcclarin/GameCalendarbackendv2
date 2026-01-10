@@ -3,6 +3,7 @@ const express = require('express');
 const { Event, Game, User, Group, EventParticipation, UserGroup } = require('../models');
 const { Op } = require('sequelize');
 const router = express.Router();
+const auth0Service = require('../services/auth0Service');
 const googleCalendarService = require('../services/googleCalendarService');
 
 // Helper function to format event with custom participants
@@ -123,43 +124,72 @@ router.get('/user/:user_id', async (req, res) => {
     
     // If user doesn't exist but we have authenticated user info, auto-create
     if (!user && req.user && req.user.user_id === req.params.user_id) {
-      // Use Auth0 token info to create user
-      // For Google sign-in, email should be available in the token
-      const userEmail = req.user.email;
-      if (!userEmail) {
-        console.warn(`No email found in token for user ${req.params.user_id}. Available fields:`, {
-          name: req.user.name,
-          nickname: req.user.nickname,
-          given_name: req.user.given_name,
-          family_name: req.user.family_name,
-        });
+      let userEmail = req.user.email;
+      let userName = req.user.name || req.user.nickname || req.user.given_name || req.user.email?.split('@')[0] || 'User';
+      
+      // If email is missing from token, try to fetch from Auth0 Management API
+      if (!userEmail || userEmail.includes('@auth0.local') || userEmail.includes('@auth0')) {
+        try {
+          const auth0User = await auth0Service.getUserById(req.params.user_id);
+          if (auth0User) {
+            const userDetails = auth0Service.extractUserDetails(auth0User);
+            userEmail = userDetails.email;
+            userName = userDetails.username;
+          }
+        } catch (auth0Error) {
+          // If Management API fails, continue with fallback
+          console.warn('Auth0 Management API lookup failed during user creation:', auth0Error.message);
+        }
       }
       
-      // Email is required, so use a valid email format if not provided
-      // This should rarely happen with Google sign-in
-      const finalEmail = userEmail || `${req.params.user_id.replace(/[|:]/g, '-')}@auth0.local`;
-      const userName = req.user.name || req.user.nickname || req.user.given_name || req.user.email?.split('@')[0] || 'User';
+      // Improve username extraction for email/password users
+      if (!userEmail || userEmail.includes('@auth0.local') || userEmail.includes('@auth0')) {
+        userEmail = `${req.params.user_id.replace(/[|:]/g, '-')}@auth0.local`;
+      }
+      
+      // If username is still generic, try to extract from email
+      if (userName === 'User' && userEmail && !userEmail.includes('@auth0.local') && !userEmail.includes('@auth0')) {
+        userName = userEmail.split('@')[0];
+      }
+      
+      // Combine given_name and family_name if available
+      if (req.user.given_name || req.user.family_name) {
+        const fullName = [req.user.given_name, req.user.family_name].filter(Boolean).join(' ').trim();
+        if (fullName) {
+          userName = fullName;
+        }
+      }
       
       try {
         const [newUser, created] = await User.findOrCreate({
           where: { user_id: req.params.user_id },
           defaults: {
             user_id: req.params.user_id,
-            email: finalEmail,
+            email: userEmail,
             username: userName,
           }
         });
-        user = newUser;
         
-        if (created) {
-          console.log(`Auto-created user: ${user.user_id} (${user.username}) with email: ${user.email}`);
+        // If user already existed but has wrong email/username, update them
+        if (!created) {
+          const needsUpdate = 
+            (newUser.email !== userEmail && !newUser.email.includes('@auth0.local') && !newUser.email.includes('@auth0')) ||
+            (newUser.username === 'User' && userName !== 'User');
+          
+          if (needsUpdate) {
+            await newUser.update({
+              email: userEmail,
+              username: userName
+            });
+          }
         }
+        
+        user = newUser;
       } catch (error) {
-        // If creation fails (e.g., email already exists), try to find the user
         console.error('Error auto-creating user:', error.message);
         user = await User.findOne({ where: { user_id: req.params.user_id } });
         if (!user) {
-          throw error; // Re-throw if we still can't find/create the user
+          throw error;
         }
       }
     }
