@@ -123,22 +123,25 @@ class Auth0Service {
     const emailVerified = auth0User.email_verified || false;
     
     // Priority order for username:
-    // 1. username field (for email/password users - this is what they entered during signup)
-    // 2. name field (for Google OAuth users)
+    // 1. username field (for email/password users - this is what they entered during signup!)
+    //    Auth0 structure: name = email, email = email, username = what they entered during signup
+    // 2. name field (for Google OAuth users, but skip if it's just the email)
     // 3. nickname (if different from email)
     // 4. given_name + family_name (for Google OAuth users)
     // 5. Extract from email as fallback
     let username;
     
-    // Check username field first (for email/password signup users)
-    if (auth0User.username && auth0User.username !== email && auth0User.username.trim().length > 0) {
+    // Check username field FIRST and use it directly (for email/password users)
+    // This is the username they entered during signup - use it regardless of whether it equals email
+    // The name field is just the email, so we ignore that and use username instead
+    if (auth0User.username && auth0User.username.trim().length > 0) {
       username = auth0User.username.trim();
     }
-    // Then check name field (for Google OAuth users)
+    // Then check name field (for Google OAuth users, but skip if it equals email)
     else if (auth0User.name && auth0User.name !== email && auth0User.name.trim().length > 0) {
       username = auth0User.name.trim();
     }
-    // Then nickname
+    // Then check nickname (if different from email)
     else if (auth0User.nickname && auth0User.nickname !== email && auth0User.nickname.trim().length > 0) {
       username = auth0User.nickname.trim();
     }
@@ -159,6 +162,18 @@ class Auth0Service {
     // Last resort fallback
     if (!username) {
       username = 'User';
+    }
+
+    // Debug logging in development to help troubleshoot
+    if (process.env.NODE_ENV === 'development') {
+      console.log('Auth0 user extraction:', {
+        user_id: auth0User.user_id,
+        email: email,
+        username_field: auth0User.username,
+        name_field: auth0User.name,
+        nickname: auth0User.nickname,
+        extracted_username: username
+      });
     }
 
     return {

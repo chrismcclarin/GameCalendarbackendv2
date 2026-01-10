@@ -92,25 +92,32 @@ router.get('/:user_id', async (req, res) => {
       let userName = req.user.username || req.user.name || req.user.nickname || req.user.given_name || req.user.email?.split('@')[0] || 'User';
       let userEmail = req.user.email;
       
-      // If email is missing from token OR username is generic, try to fetch from Auth0 Management API
+      // ALWAYS try to fetch from Auth0 Management API if we have credentials
       // This ensures we get the username they entered during signup (for email/password users)
-      if (!userEmail || userEmail.includes('@auth0.local') || userEmail.includes('@auth0') || !req.user.username) {
-        try {
-          const auth0User = await auth0Service.getUserById(req.params.user_id);
-          if (auth0User) {
-            // User exists in Auth0 (verified), safe to use their details
-            const userDetails = auth0Service.extractUserDetails(auth0User);
-            if (userDetails.email && !userDetails.email.includes('@auth0.local') && !userDetails.email.includes('@auth0')) {
-              userEmail = userDetails.email;
-            }
-            // Use username from Auth0 (this includes username from signup for email/password users)
-            if (userDetails.username && userDetails.username !== 'User') {
-              userName = userDetails.username;
-            }
+      // Even if email is in token, username might not be, so we need Management API
+      try {
+        const auth0User = await auth0Service.getUserById(req.params.user_id);
+        if (auth0User) {
+          // User exists in Auth0 (verified), safe to use their details
+          const userDetails = auth0Service.extractUserDetails(auth0User);
+          
+          // Always use email from Management API if available and valid
+          if (userDetails.email && !userDetails.email.includes('@auth0.local') && !userDetails.email.includes('@auth0')) {
+            userEmail = userDetails.email;
           }
-        } catch (auth0Error) {
-          // If Management API fails, continue with fallback
-          console.warn('Auth0 Management API lookup failed during user creation:', auth0Error.message);
+          
+          // Always use username from Management API if available and not generic
+          // This is critical for email/password users who entered a username during signup
+          if (userDetails.username && userDetails.username.trim().length > 0 && userDetails.username !== 'User') {
+            userName = userDetails.username.trim();
+          }
+        }
+      } catch (auth0Error) {
+        // If Management API is not configured or fails, log and continue with token data
+        // This allows the system to work without Management API (with reduced functionality)
+        console.warn('Auth0 Management API lookup failed during user creation (this is optional):', auth0Error.message);
+        if (process.env.NODE_ENV === 'development') {
+          console.log('Falling back to token data. Make sure AUTH0_MANAGEMENT_CLIENT_ID and AUTH0_MANAGEMENT_CLIENT_SECRET are set for full functionality.');
         }
       }
       
@@ -175,58 +182,43 @@ router.get('/:user_id', async (req, res) => {
     // This handles cases where users were created before we had proper email extraction
     if (user && req.user && req.user.user_id === req.params.user_id) {
       const hasIncorrectEmail = user.email && (user.email.includes('@auth0.local') || user.email.includes('@auth0'));
-      const hasGenericUsername = user.username === 'User';
+      const hasGenericUsername = user.username === 'User' || !user.username || user.username.trim().length === 0;
       
       if (hasIncorrectEmail || hasGenericUsername) {
-        let userEmail = req.user.email;
-        let userName = req.user.name || req.user.nickname || req.user.given_name || req.user.email?.split('@')[0] || 'User';
-        
-        // If email is still missing or incorrect, try Auth0 Management API
-        if (!userEmail || userEmail.includes('@auth0.local') || userEmail.includes('@auth0')) {
-          try {
-            const auth0User = await auth0Service.getUserById(req.params.user_id);
-            if (auth0User) {
-              const userDetails = auth0Service.extractUserDetails(auth0User);
-              userEmail = userDetails.email;
-              userName = userDetails.username;
+        // ALWAYS try Auth0 Management API to get correct data
+        // This is especially important for email/password users with username from signup
+        try {
+          const auth0User = await auth0Service.getUserById(req.params.user_id);
+          if (auth0User) {
+            const userDetails = auth0Service.extractUserDetails(auth0User);
+            
+            const updateData = {};
+            
+            // Update email if incorrect
+            if (hasIncorrectEmail && userDetails.email && !userDetails.email.includes('@auth0.local') && !userDetails.email.includes('@auth0')) {
+              updateData.email = userDetails.email;
             }
-          } catch (auth0Error) {
-            // If Management API fails, skip update
-            console.warn('Auth0 Management API lookup failed during user update:', auth0Error.message);
-          }
-        }
-        
-        // If we got a real email (not @auth0.local), update the user
-        if (userEmail && !userEmail.includes('@auth0.local') && !userEmail.includes('@auth0')) {
-          const updateData = {};
-          
-          if (hasIncorrectEmail) {
-            updateData.email = userEmail;
-          }
-          
-          // Extract username from email if still generic
-          if (hasGenericUsername) {
-            if (userName === 'User' && userEmail) {
-              userName = userEmail.split('@')[0];
+            
+            // Update username if generic or missing
+            if (hasGenericUsername && userDetails.username && userDetails.username.trim().length > 0 && userDetails.username !== 'User') {
+              updateData.username = userDetails.username.trim();
             }
-            // Combine given_name and family_name if available
-            if (req.user.given_name || req.user.family_name) {
-              const fullName = [req.user.given_name, req.user.family_name].filter(Boolean).join(' ').trim();
-              if (fullName) {
-                userName = fullName;
-              }
+            
+            if (Object.keys(updateData).length > 0) {
+              await user.update(updateData);
+              console.log(`Fixed user ${user.user_id} with Management API data:`, updateData);
+              // Reload user to get updated data
+              user = await User.findOne({
+                where: { user_id: req.params.user_id },
+                include: [{ model: Group }]
+              });
             }
-            updateData.username = userName;
           }
-          
-          if (Object.keys(updateData).length > 0) {
-            await user.update(updateData);
-            console.log(`Fixed user ${user.user_id}:`, updateData);
-            // Reload user to get updated data
-            user = await User.findOne({
-              where: { user_id: req.params.user_id },
-              include: [{ model: Group }]
-            });
+        } catch (auth0Error) {
+          // If Management API fails, log but don't break
+          console.warn('Auth0 Management API lookup failed during user update:', auth0Error.message);
+          if (process.env.NODE_ENV === 'development') {
+            console.log('Make sure AUTH0_MANAGEMENT_CLIENT_ID and AUTH0_MANAGEMENT_CLIENT_SECRET are set.');
           }
         }
       }
