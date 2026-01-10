@@ -5,6 +5,7 @@ const { Op } = require('sequelize');
 const router = express.Router();
 const auth0Service = require('../services/auth0Service');
 const googleCalendarService = require('../services/googleCalendarService');
+const emailService = require('../services/emailService');
 
 // Helper function to format event with custom participants
 const formatEventWithCustomParticipants = (event) => {
@@ -340,22 +341,26 @@ router.post('/', validateEventCreate, async (req, res) => {
     // Format event with custom participants
     const formattedEvent = formatEventWithCustomParticipants(completeEvent);
     
-    // Add to Google Calendar if event is in the future
-    // NOTE: This requires users to have Google Calendar tokens stored
-    // See GOOGLE_CALENDAR_SETUP.md for setup instructions
-    if (googleCalendarService.isFutureEvent(start_date)) {
-      try {
-        // Get all group members with their emails and Google Calendar tokens
-        const group = await Group.findByPk(group_id, {
-          include: [{
-            model: User,
-            attributes: ['id', 'email', 'google_calendar_token', 'google_calendar_refresh_token', 'google_calendar_enabled'],
-            through: { attributes: [] }
-          }]
-        });
+    // Check if event is in the future (for Google Calendar and email notifications)
+    const isFutureEvent = googleCalendarService.isFutureEvent(start_date);
+    
+    if (isFutureEvent) {
+      // Get group details for notifications
+      const group = await Group.findByPk(group_id, {
+        include: [{
+          model: User,
+          attributes: ['id', 'user_id', 'username', 'email', 'email_notifications_enabled', 'google_calendar_token', 'google_calendar_refresh_token', 'google_calendar_enabled'],
+          through: { attributes: ['role'] }
+        }]
+      });
+      
+      if (group && group.Users) {
+        const game = await Game.findByPk(game_id, { attributes: ['name'] });
         
-        if (group && group.Users) {
-          const game = await Game.findByPk(game_id, { attributes: ['name'] });
+        // Add to Google Calendar if event is in the future
+        // NOTE: This requires users to have Google Calendar tokens stored
+        // See GOOGLE_CALENDAR_SETUP.md for setup instructions
+        try {
           const eventDataForCalendar = {
             start_date: start_date,
             duration_minutes: duration_minutes || 60,
@@ -370,16 +375,85 @@ router.post('/', validateEventCreate, async (req, res) => {
             eventDataForCalendar,
             group.Users
           );
+        } catch (calendarError) {
+          // Log error but don't fail the event creation
+          if (process.env.NODE_ENV === 'development') {
+            console.error('Error adding event to Google Calendar (non-fatal):', calendarError.message);
+          } else {
+            console.error('Error adding event to Google Calendar (non-fatal)');
+          }
         }
-      } catch (calendarError) {
-        // Log error but don't fail the event creation
-        // Log error but don't expose details in production
-        if (process.env.NODE_ENV === 'development') {
-          console.error('Error adding event to Google Calendar (non-fatal):', calendarError.message);
-        } else {
-          console.error('Error adding event to Google Calendar (non-fatal)');
+        
+        // Send email notifications to group members
+        // Only send to users who have email_notifications_enabled = true
+        try {
+          const recipients = group.Users
+            .filter(user => {
+              // Only send to users with:
+              // 1. Valid email address
+              // 2. Email notifications enabled (defaults to true if not set)
+              // 3. Email is not @auth0.local (invalid email)
+              return user.email && 
+                     user.email_notifications_enabled !== false &&
+                     !user.email.includes('@auth0.local') &&
+                     !user.email.includes('@auth0');
+            })
+            .map(user => ({
+              email: user.email,
+              name: user.username,
+              user_id: user.user_id
+            }));
+          
+          if (recipients.length > 0 && emailService.isConfigured()) {
+            // Format start time from start_date
+            const eventDate = new Date(start_date);
+            const startTime = eventDate.toLocaleTimeString('en-US', {
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: false
+            });
+            
+            // Build event URL (assuming event detail page exists)
+            // Use event.id which is available after creation
+            const eventUrl = `${process.env.FRONTEND_URL || process.env.AUTH0_BASE_URL || 'http://localhost:3000'}/group/${group_id}/event/${event.id}`;
+            
+            const eventDataForEmail = {
+              gameName: game?.name || 'Board Game',
+              groupName: group.name,
+              startDate: start_date,
+              startTime: startTime,
+              durationMinutes: duration_minutes || 60,
+              location: null, // Can be added later if location field exists
+              comments: comments || null,
+              eventUrl: eventUrl
+            };
+            
+            // Send emails asynchronously - don't wait for completion
+            // This ensures event creation doesn't fail if emails fail
+            emailService.sendGameSessionNotificationToMultiple(recipients, eventDataForEmail)
+              .then(result => {
+                if (process.env.NODE_ENV === 'development' || result.failed > 0) {
+                  console.log(`Email notifications sent: ${result.successful}/${result.total} successful`);
+                  if (result.failed > 0) {
+                    console.error('Failed email recipients:', result.results.filter(r => !r.success).map(r => r.recipient));
+                  }
+                }
+              })
+              .catch(emailError => {
+                console.error('Error sending email notifications (non-fatal):', emailError.message);
+              });
+          } else if (recipients.length > 0 && !emailService.isConfigured()) {
+            if (process.env.NODE_ENV === 'development') {
+              console.warn('Email service not configured. Skipping email notifications.');
+            }
+          }
+        } catch (emailError) {
+          // Log error but don't fail the event creation
+          console.error('Error preparing email notifications (non-fatal):', emailError.message);
+          if (process.env.NODE_ENV === 'development') {
+            console.error('Email error details:', emailError);
+          }
         }
-        // Event is still created successfully even if calendar fails
       }
     }
     
