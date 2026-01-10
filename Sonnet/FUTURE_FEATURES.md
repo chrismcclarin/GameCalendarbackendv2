@@ -171,7 +171,98 @@ CREATE INDEX idx_friendships_status ON "Friendships"(status);
 2. **Email Notification Infrastructure** - Set up email service (SendGrid/SES/etc.)
 3. **Group Membership Approval** - Important feature for user control
 4. **Email Notifications** - Game session and group invitation emails
-5. **Friends List** - Most complex feature, can be built incrementally
+5. **Email/Password Authentication** - Alternative to Google-only sign-on, expands user base
+6. **Friends List** - Most complex feature, can be built incrementally
+
+---
+
+---
+
+## Authentication & Email Verification
+
+### 6. Email/Password Authentication with Email Verification
+**Description:** Add email/password authentication as an alternative to Google sign-on, with email verification to ensure email addresses are real.
+
+**Requirements:**
+- Auth0 Configuration:
+  - Enable "Email" database connection in Auth0
+  - Configure email verification settings
+  - Set up email templates for verification
+  - Configure password policy (strength requirements)
+- Frontend:
+  - Add "Sign up with Email" option on login/landing page
+  - Create sign-up form with:
+    - Email address
+    - Password (with strength indicator)
+    - Password confirmation
+    - Username (optional, can default to email prefix)
+  - Create login form for email/password users
+  - Show verification status/prompt if email not verified
+  - Resend verification email functionality
+- Backend:
+  - Auth0 handles authentication, but may need to:
+    - Check email verification status via Auth0 Management API
+    - Handle unverified user access (restrict certain features?)
+  - Consider: Should unverified users have limited access?
+
+**Email Verification Flow:**
+1. User signs up with email/password
+2. Auth0 sends verification email automatically
+3. User clicks verification link in email
+4. Email is marked as verified in Auth0
+5. User can now fully use the application
+
+**Auth0 Setup:**
+- Enable "Email" database connection
+- Configure email provider (Auth0's default or custom SMTP)
+- Set email verification settings:
+  - Require email verification before login (optional)
+  - Or allow login but restrict features until verified
+- Customize email templates for verification emails
+- Configure password policy:
+  - Minimum length
+  - Complexity requirements
+  - Password history (prevent reuse)
+
+**Frontend Components:**
+- `SignUpForm` component:
+  - Email input with validation
+  - Password input with strength meter
+  - Password confirmation
+  - Username input (optional)
+  - Terms of service checkbox (if needed)
+  - Submit button
+- `LoginForm` component:
+  - Email input
+  - Password input
+  - "Forgot password?" link
+  - "Sign in with Google" button (existing)
+- `EmailVerificationPrompt` component:
+  - Show if user is logged in but email not verified
+  - "Resend verification email" button
+  - Instructions on how to verify
+
+**Backend Considerations:**
+- Auth0 Management API integration to check verification status
+- Optional: Restrict certain features for unverified users
+- Handle password reset flow (Auth0 provides this)
+- Consider rate limiting on sign-up attempts
+
+**Testing Requirements:**
+- Test sign-up flow
+- Test email verification link
+- Test login with verified email
+- Test login with unverified email (if allowed)
+- Test password reset flow
+- Test password strength validation
+- Test duplicate email sign-up prevention
+- Test invalid verification token handling
+- Test resend verification email functionality
+
+**Migration Considerations:**
+- Existing Google OAuth users should continue to work
+- Users should be able to link email/password to existing Google account (or vice versa)
+- Consider: Should users be able to have both authentication methods?
 
 ---
 
@@ -182,3 +273,5 @@ CREATE INDEX idx_friendships_status ON "Friendships"(status);
 - Consider using a job queue (Bull, BullMQ, or similar) for email sending if volume gets high
 - Google Contacts import requires additional OAuth scope and consent from user
 - Friends list can start simple and add Google import later
+- Email/password authentication requires Auth0 Email database connection configuration
+- Email verification can use Auth0's built-in system or custom implementation
