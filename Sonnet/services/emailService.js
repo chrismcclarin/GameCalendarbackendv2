@@ -1,18 +1,38 @@
 // services/emailService.js
-// Email service for sending notifications using SendGrid
-const sgMail = require('@sendgrid/mail');
+// Email service for sending notifications using Porkbun SMTP via nodemailer
+const nodemailer = require('nodemailer');
 
 class EmailService {
   constructor() {
-    this.apiKey = process.env.SENDGRID_API_KEY;
-    this.fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.FROM_EMAIL || 'noreply@periodictabletop.com';
+    this.emailPassword = process.env.EMAIL_PASSWORD;
+    this.fromEmail = process.env.FROM_EMAIL || 'noreply@nextgamenight.app';
     this.frontendUrl = process.env.FRONTEND_URL || process.env.AUTH0_BASE_URL || 'http://localhost:3000';
     
-    // Initialize SendGrid if API key is provided
-    if (this.apiKey) {
-      sgMail.setApiKey(this.apiKey);
+    // SMTP configuration for Porkbun
+    this.smtpConfig = {
+      host: 'smtp.porkbun.com',
+      port: 587,
+      secure: false, // Use TLS/STARTTLS (not SSL)
+      auth: {
+        user: 'noreply@nextgamenight.app',
+        pass: this.emailPassword
+      },
+      tls: {
+        // Do not fail on invalid certificates
+        rejectUnauthorized: false
+      }
+    };
+    
+    // Create transporter if password is configured
+    this.transporter = null;
+    if (this.emailPassword) {
+      try {
+        this.transporter = nodemailer.createTransport(this.smtpConfig);
+      } catch (error) {
+        console.error('Error creating email transporter:', error.message);
+      }
     } else if (process.env.NODE_ENV === 'production') {
-      console.warn('⚠️  WARNING: SENDGRID_API_KEY not set. Email notifications will be disabled.');
+      console.warn('⚠️  WARNING: EMAIL_PASSWORD not set. Email notifications will be disabled.');
     }
   }
 
@@ -20,7 +40,24 @@ class EmailService {
    * Check if email service is configured
    */
   isConfigured() {
-    return !!this.apiKey;
+    return !!this.emailPassword && !!this.transporter;
+  }
+
+  /**
+   * Verify SMTP connection (optional - for testing)
+   */
+  async verifyConnection() {
+    if (!this.transporter) {
+      return false;
+    }
+    
+    try {
+      await this.transporter.verify();
+      return true;
+    } catch (error) {
+      console.error('SMTP connection verification failed:', error.message);
+      return false;
+    }
   }
 
   /**
@@ -183,27 +220,33 @@ You can manage your notification preferences in your profile: ${this.frontendUrl
         recipientName
       });
 
-      const msg = {
+      const mailOptions = {
+        from: `"PeriodicTableTop" <${this.fromEmail}>`,
         to: recipientEmail,
-        from: this.fromEmail,
         subject: `New Game Session: ${eventData.gameName} - ${eventData.groupName}`,
         text: text,
         html: html,
       };
 
-      await sgMail.send(msg);
+      const info = await this.transporter.sendMail(mailOptions);
       
       if (process.env.NODE_ENV === 'development') {
         console.log(`✅ Email sent to ${recipientEmail} for game session: ${eventData.gameName}`);
+        console.log(`   Message ID: ${info.messageId}`);
       }
       
-      return { success: true };
+      return { success: true, messageId: info.messageId };
     } catch (error) {
       console.error('Error sending game session notification email:', error);
       
       // Log detailed error in development
-      if (process.env.NODE_ENV === 'development' && error.response) {
-        console.error('SendGrid error details:', error.response.body);
+      if (process.env.NODE_ENV === 'development') {
+        console.error('SMTP error details:', {
+          message: error.message,
+          code: error.code,
+          command: error.command,
+          response: error.response
+        });
       }
       
       return { success: false, error: error.message };
