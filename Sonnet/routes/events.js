@@ -369,11 +369,22 @@ router.post('/', validateEventCreate, async (req, res) => {
             timezone: timezone || 'UTC' // Use user's timezone, fallback to UTC
           };
           
-          // Create calendar events for members with Google Calendar connected
+          // Create calendar events for event participants with Google Calendar connected
+          // Get participant user IDs from EventParticipations (exclude custom participants)
+          const participantUserIds = completeEvent.EventParticipations
+            .filter(ep => ep.User && ep.User.id)
+            .map(ep => ep.User.id);
+          
+          // Get participant user details (only those who are in the event)
+          const participantMembers = group.Users.filter(user => 
+            participantUserIds.includes(user.id)
+          );
+          
+          // Create calendar events for participants with Google Calendar connected
           // This will silently fail if no users have tokens, which is expected
           await googleCalendarService.createCalendarEventsForGroup(
             eventDataForCalendar,
-            group.Users
+            participantMembers
           );
         } catch (calendarError) {
           // Log error but don't fail the event creation

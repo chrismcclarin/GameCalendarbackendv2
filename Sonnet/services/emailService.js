@@ -26,8 +26,25 @@ class EmailService {
       }
     };
     
+    // Fallback configuration for port 50587 (STARTTLS - alternative port if 587 is blocked)
+    this.smtpConfigFallback1 = {
+      host: 'smtp.porkbun.com',
+      port: 50587,
+      secure: false, // Use STARTTLS (same as 587)
+      connectionTimeout: 10000,
+      socketTimeout: 10000,
+      greetingTimeout: 10000,
+      auth: {
+        user: 'noreply@nextgamenight.app',
+        pass: this.emailPassword
+      },
+      tls: {
+        rejectUnauthorized: false
+      }
+    };
+    
     // Fallback configuration for port 465 (SSL)
-    this.smtpConfigFallback = {
+    this.smtpConfigFallback2 = {
       host: 'smtp.porkbun.com',
       port: 465,
       secure: true, // Use SSL for port 465
@@ -45,7 +62,7 @@ class EmailService {
     
     // Create transporter if password is configured
     this.transporter = null;
-    this.usingFallback = false;
+    this.currentPort = 587; // Track which port we're using
     
     if (this.emailPassword) {
       this.initializeTransporter();
@@ -65,24 +82,47 @@ class EmailService {
   }
   
   /**
-   * Initialize transporter with primary config, fallback to port 465 if needed
+   * Initialize transporter with primary config
    */
   initializeTransporter() {
     try {
       this.transporter = nodemailer.createTransport(this.smtpConfig);
-      this.usingFallback = false;
+      this.currentPort = 587;
     } catch (error) {
       console.error('Error creating email transporter with port 587:', error.message);
-      // Try fallback port 465
+      this.transporter = null;
+    }
+  }
+  
+  /**
+   * Try fallback ports in order: 50587, then 465
+   */
+  tryFallbackPorts() {
+    // Try port 50587 first (alternative STARTTLS port)
+    if (this.currentPort !== 50587) {
       try {
-        this.transporter = nodemailer.createTransport(this.smtpConfigFallback);
-        this.usingFallback = true;
-        console.log('Using fallback SMTP configuration (port 465 with SSL)');
-      } catch (fallbackError) {
-        console.error('Error creating email transporter with port 465:', fallbackError.message);
-        this.transporter = null;
+        this.transporter = nodemailer.createTransport(this.smtpConfigFallback1);
+        this.currentPort = 50587;
+        console.log('Switched to SMTP port 50587 (alternative STARTTLS)');
+        return true;
+      } catch (error) {
+        console.log('Port 50587 failed, trying port 465...');
       }
     }
+    
+    // Try port 465 (SSL)
+    if (this.currentPort !== 465) {
+      try {
+        this.transporter = nodemailer.createTransport(this.smtpConfigFallback2);
+        this.currentPort = 465;
+        console.log('Switched to SMTP port 465 (SSL)');
+        return true;
+      } catch (error) {
+        console.error('All SMTP ports failed:', error.message);
+      }
+    }
+    
+    return false;
   }
 
   /**
@@ -103,22 +143,29 @@ class EmailService {
     
     try {
       await this.transporter.verify();
-      console.log(`✅ SMTP connection verified (port ${this.usingFallback ? 465 : 587})`);
+      console.log(`✅ SMTP connection verified (port ${this.currentPort})`);
       return true;
     } catch (error) {
-      console.error(`❌ SMTP connection verification failed (port ${this.usingFallback ? 465 : 587}):`, error.message);
+      console.error(`❌ SMTP connection verification failed (port ${this.currentPort}):`, error.message);
       
-      // If primary config failed, try fallback
-      if (!this.usingFallback) {
-        console.log('Attempting fallback to port 465 (SSL)...');
+      // Try fallback ports
+      if (this.tryFallbackPorts()) {
         try {
-          this.transporter = nodemailer.createTransport(this.smtpConfigFallback);
-          this.usingFallback = true;
           await this.transporter.verify();
-          console.log('✅ SMTP connection verified (fallback port 465)');
+          console.log(`✅ SMTP connection verified (fallback port ${this.currentPort})`);
           return true;
         } catch (fallbackError) {
-          console.error('❌ Fallback SMTP connection also failed:', fallbackError.message);
+          console.error(`❌ Fallback SMTP connection (port ${this.currentPort}) also failed:`, fallbackError.message);
+          // Try the other fallback if we haven't tried both
+          if (this.currentPort === 50587 && this.tryFallbackPorts()) {
+            try {
+              await this.transporter.verify();
+              console.log(`✅ SMTP connection verified (final fallback port ${this.currentPort})`);
+              return true;
+            } catch (finalError) {
+              console.error(`❌ All SMTP ports failed:`, finalError.message);
+            }
+          }
         }
       }
       
@@ -322,7 +369,7 @@ You can manage your notification preferences in your profile: ${this.frontendUrl
       if (process.env.NODE_ENV === 'development') {
         console.log(`✅ Email sent to ${recipientEmail} for game session: ${eventData.gameName}`);
         console.log(`   Message ID: ${info.messageId}`);
-        console.log(`   Using port: ${this.usingFallback ? 465 : 587}`);
+        console.log(`   Using port: ${this.currentPort}`);
       }
       
       return { success: true, messageId: info.messageId };
@@ -336,26 +383,39 @@ You can manage your notification preferences in your profile: ${this.frontendUrl
           code: error.code,
           command: error.command,
           response: error.response,
-          usingPort: this.usingFallback ? 465 : 587
+          usingPort: this.currentPort
         });
       }
       
-      // If connection error and using primary config, try fallback
-      if (!this.usingFallback && (error.code === 'ETIMEDOUT' || error.code === 'ECONNREFUSED' || error.code === 'ECONNRESET')) {
-        console.log('Connection error detected, attempting fallback to port 465...');
-        try {
-          this.transporter = nodemailer.createTransport(this.smtpConfigFallback);
-          this.usingFallback = true;
-          
+      // If connection error, try fallback ports
+      if (error.code === 'ETIMEDOUT' || error.code === 'ECONNREFUSED' || error.code === 'ECONNRESET') {
+        console.log(`Connection error on port ${this.currentPort}, attempting fallback ports...`);
+        if (this.tryFallbackPorts()) {
           // Retry send with fallback
-          const info = await this.retryWithBackoff(async () => {
-            return await this.transporter.sendMail(mailOptions);
-          });
-          
-          console.log(`✅ Email sent using fallback configuration (port 465)`);
-          return { success: true, messageId: info.messageId };
-        } catch (fallbackError) {
-          console.error('❌ Fallback SMTP configuration also failed:', fallbackError.message);
+          try {
+            const info = await this.retryWithBackoff(async () => {
+              return await this.transporter.sendMail(mailOptions);
+            });
+            
+            console.log(`✅ Email sent using fallback configuration (port ${this.currentPort})`);
+            return { success: true, messageId: info.messageId };
+          } catch (fallbackError) {
+            console.error(`❌ Fallback SMTP configuration (port ${this.currentPort}) also failed:`, fallbackError.message);
+            // Try the other fallback if we haven't tried both
+            if (this.currentPort === 50587) {
+              if (this.tryFallbackPorts()) {
+                try {
+                  const info = await this.retryWithBackoff(async () => {
+                    return await this.transporter.sendMail(mailOptions);
+                  });
+                  console.log(`✅ Email sent using final fallback (port ${this.currentPort})`);
+                  return { success: true, messageId: info.messageId };
+                } catch (finalError) {
+                  console.error(`❌ All SMTP ports failed:`, finalError.message);
+                }
+              }
+            }
+          }
         }
       }
       
@@ -407,7 +467,7 @@ You can manage your notification preferences in your profile: ${this.frontendUrl
     if (process.env.NODE_ENV === 'development' || failureCount > 0) {
       console.log(`Email notification results: ${successCount} sent, ${failureCount} failed`);
       if (successCount > 0) {
-        console.log(`Using SMTP port: ${this.usingFallback ? 465 : 587}`);
+        console.log(`Using SMTP port: ${this.currentPort}`);
       }
     }
 

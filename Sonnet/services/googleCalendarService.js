@@ -238,10 +238,23 @@ class GoogleCalendarService {
   async createCalendarEventsForGroup(eventData, groupMembers) {
     const results = [];
     
+    // Helper function to validate email addresses
+    const isValidEmail = (email) => {
+      if (!email || typeof email !== 'string') return false;
+      // Check for basic email format
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      // Exclude Auth0 placeholder emails
+      if (email.includes('@auth0.local') || email.includes('@auth0')) return false;
+      // Exclude Auth0 user_ids (they contain | character)
+      if (email.includes('|')) return false;
+      return emailRegex.test(email);
+    };
+    
     // Get ALL participant emails (Gmail and non-Gmail users)
     // Google Calendar API can send invitations to any email address
+    // Filter out invalid emails (Auth0 user_ids, placeholder emails, etc.)
     const participantEmails = groupMembers
-      .filter(m => m.email)
+      .filter(m => m.email && isValidEmail(m.email))
       .map(m => m.email);
 
     if (participantEmails.length === 0) {
