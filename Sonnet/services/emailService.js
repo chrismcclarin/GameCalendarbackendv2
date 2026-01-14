@@ -8,11 +8,14 @@ class EmailService {
     this.fromEmail = process.env.FROM_EMAIL || 'noreply@nextgamenight.app';
     this.frontendUrl = process.env.FRONTEND_URL || process.env.AUTH0_BASE_URL || 'http://localhost:3000';
     
-    // SMTP configuration for Porkbun
+    // SMTP configuration for Porkbun - try port 587 first (STARTTLS)
     this.smtpConfig = {
       host: 'smtp.porkbun.com',
       port: 587,
       secure: false, // Use TLS/STARTTLS (not SSL)
+      connectionTimeout: 10000, // 10 seconds connection timeout
+      socketTimeout: 10000, // 10 seconds socket timeout
+      greetingTimeout: 10000, // 10 seconds greeting timeout
       auth: {
         user: 'noreply@nextgamenight.app',
         pass: this.emailPassword
@@ -23,16 +26,62 @@ class EmailService {
       }
     };
     
+    // Fallback configuration for port 465 (SSL)
+    this.smtpConfigFallback = {
+      host: 'smtp.porkbun.com',
+      port: 465,
+      secure: true, // Use SSL for port 465
+      connectionTimeout: 10000,
+      socketTimeout: 10000,
+      greetingTimeout: 10000,
+      auth: {
+        user: 'noreply@nextgamenight.app',
+        pass: this.emailPassword
+      },
+      tls: {
+        rejectUnauthorized: false
+      }
+    };
+    
     // Create transporter if password is configured
     this.transporter = null;
+    this.usingFallback = false;
+    
     if (this.emailPassword) {
-      try {
-        this.transporter = nodemailer.createTransport(this.smtpConfig);
-      } catch (error) {
-        console.error('Error creating email transporter:', error.message);
-      }
+      this.initializeTransporter();
     } else if (process.env.NODE_ENV === 'production') {
       console.warn('⚠️  WARNING: EMAIL_PASSWORD not set. Email notifications will be disabled.');
+    }
+    
+    // Log configuration (hide password)
+    if (this.emailPassword) {
+      console.log('📧 Email service configuration:');
+      console.log(`   Host: ${this.smtpConfig.host}`);
+      console.log(`   Port: ${this.smtpConfig.port} (STARTTLS)`);
+      console.log(`   From: ${this.fromEmail}`);
+      console.log(`   Username: ${this.smtpConfig.auth.user}`);
+      console.log(`   Password: ${'*'.repeat(this.emailPassword.length)} (${this.emailPassword.length} chars)`);
+    }
+  }
+  
+  /**
+   * Initialize transporter with primary config, fallback to port 465 if needed
+   */
+  initializeTransporter() {
+    try {
+      this.transporter = nodemailer.createTransport(this.smtpConfig);
+      this.usingFallback = false;
+    } catch (error) {
+      console.error('Error creating email transporter with port 587:', error.message);
+      // Try fallback port 465
+      try {
+        this.transporter = nodemailer.createTransport(this.smtpConfigFallback);
+        this.usingFallback = true;
+        console.log('Using fallback SMTP configuration (port 465 with SSL)');
+      } catch (fallbackError) {
+        console.error('Error creating email transporter with port 465:', fallbackError.message);
+        this.transporter = null;
+      }
     }
   }
 
@@ -44,20 +93,57 @@ class EmailService {
   }
 
   /**
-   * Verify SMTP connection (optional - for testing)
+   * Verify SMTP connection (for testing)
    */
   async verifyConnection() {
     if (!this.transporter) {
+      console.error('Email transporter not initialized');
       return false;
     }
     
     try {
       await this.transporter.verify();
+      console.log(`✅ SMTP connection verified (port ${this.usingFallback ? 465 : 587})`);
       return true;
     } catch (error) {
-      console.error('SMTP connection verification failed:', error.message);
+      console.error(`❌ SMTP connection verification failed (port ${this.usingFallback ? 465 : 587}):`, error.message);
+      
+      // If primary config failed, try fallback
+      if (!this.usingFallback) {
+        console.log('Attempting fallback to port 465 (SSL)...');
+        try {
+          this.transporter = nodemailer.createTransport(this.smtpConfigFallback);
+          this.usingFallback = true;
+          await this.transporter.verify();
+          console.log('✅ SMTP connection verified (fallback port 465)');
+          return true;
+        } catch (fallbackError) {
+          console.error('❌ Fallback SMTP connection also failed:', fallbackError.message);
+        }
+      }
+      
       return false;
     }
+  }
+
+  /**
+   * Retry function with exponential backoff
+   */
+  async retryWithBackoff(fn, maxRetries = 3, baseDelay = 1000) {
+    let lastError;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (error) {
+        lastError = error;
+        if (attempt < maxRetries - 1) {
+          const delay = baseDelay * Math.pow(2, attempt); // Exponential backoff: 1s, 2s, 4s
+          console.log(`Email send attempt ${attempt + 1} failed, retrying in ${delay}ms... (${error.message})`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+    }
+    throw lastError;
   }
 
   /**
@@ -206,7 +292,7 @@ You can manage your notification preferences in your profile: ${this.frontendUrl
   }
 
   /**
-   * Send game session notification email
+   * Send game session notification email with retry logic
    */
   async sendGameSessionNotification(recipientEmail, recipientName, eventData) {
     if (!this.isConfigured()) {
@@ -214,30 +300,34 @@ You can manage your notification preferences in your profile: ${this.frontendUrl
       return { success: false, error: 'Email service not configured' };
     }
 
+    const { html, text } = this.generateGameSessionEmailTemplate({
+      ...eventData,
+      recipientName
+    });
+
+    const mailOptions = {
+      from: `"PeriodicTableTop" <${this.fromEmail}>`,
+      to: recipientEmail,
+      subject: `New Game Session: ${eventData.gameName} - ${eventData.groupName}`,
+      text: text,
+      html: html,
+    };
+
     try {
-      const { html, text } = this.generateGameSessionEmailTemplate({
-        ...eventData,
-        recipientName
+      // Send with retry logic
+      const info = await this.retryWithBackoff(async () => {
+        return await this.transporter.sendMail(mailOptions);
       });
-
-      const mailOptions = {
-        from: `"PeriodicTableTop" <${this.fromEmail}>`,
-        to: recipientEmail,
-        subject: `New Game Session: ${eventData.gameName} - ${eventData.groupName}`,
-        text: text,
-        html: html,
-      };
-
-      const info = await this.transporter.sendMail(mailOptions);
       
       if (process.env.NODE_ENV === 'development') {
         console.log(`✅ Email sent to ${recipientEmail} for game session: ${eventData.gameName}`);
         console.log(`   Message ID: ${info.messageId}`);
+        console.log(`   Using port: ${this.usingFallback ? 465 : 587}`);
       }
       
       return { success: true, messageId: info.messageId };
     } catch (error) {
-      console.error('Error sending game session notification email:', error);
+      console.error(`❌ Error sending email to ${recipientEmail}:`, error.message);
       
       // Log detailed error in development
       if (process.env.NODE_ENV === 'development') {
@@ -245,8 +335,28 @@ You can manage your notification preferences in your profile: ${this.frontendUrl
           message: error.message,
           code: error.code,
           command: error.command,
-          response: error.response
+          response: error.response,
+          usingPort: this.usingFallback ? 465 : 587
         });
+      }
+      
+      // If connection error and using primary config, try fallback
+      if (!this.usingFallback && (error.code === 'ETIMEDOUT' || error.code === 'ECONNREFUSED' || error.code === 'ECONNRESET')) {
+        console.log('Connection error detected, attempting fallback to port 465...');
+        try {
+          this.transporter = nodemailer.createTransport(this.smtpConfigFallback);
+          this.usingFallback = true;
+          
+          // Retry send with fallback
+          const info = await this.retryWithBackoff(async () => {
+            return await this.transporter.sendMail(mailOptions);
+          });
+          
+          console.log(`✅ Email sent using fallback configuration (port 465)`);
+          return { success: true, messageId: info.messageId };
+        } catch (fallbackError) {
+          console.error('❌ Fallback SMTP configuration also failed:', fallbackError.message);
+        }
       }
       
       return { success: false, error: error.message };
@@ -296,6 +406,9 @@ You can manage your notification preferences in your profile: ${this.frontendUrl
 
     if (process.env.NODE_ENV === 'development' || failureCount > 0) {
       console.log(`Email notification results: ${successCount} sent, ${failureCount} failed`);
+      if (successCount > 0) {
+        console.log(`Using SMTP port: ${this.usingFallback ? 465 : 587}`);
+      }
     }
 
     return {

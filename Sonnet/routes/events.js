@@ -384,16 +384,25 @@ router.post('/', validateEventCreate, async (req, res) => {
           }
         }
         
-        // Send email notifications to group members
+        // Send email notifications to event participants only
         // Only send to users who have email_notifications_enabled = true
+        // Exclude custom/temporary participants (they don't have user_id)
         try {
+          // Get participant user IDs from EventParticipations
+          const participantUserIds = completeEvent.EventParticipations
+            .filter(ep => ep.User && ep.User.id) // Only include participants with User data
+            .map(ep => ep.User.id);
+          
+          // Get participant user details from group members
           const recipients = group.Users
             .filter(user => {
-              // Only send to users with:
-              // 1. Valid email address
-              // 2. Email notifications enabled (defaults to true if not set)
-              // 3. Email is not @auth0.local (invalid email)
-              return user.email && 
+              // Only send to:
+              // 1. Users who are participants in this event (user.id in participantUserIds)
+              // 2. Valid email address
+              // 3. Email notifications enabled (defaults to true if not set)
+              // 4. Email is not @auth0.local (invalid email)
+              return participantUserIds.includes(user.id) &&
+                     user.email && 
                      user.email_notifications_enabled !== false &&
                      !user.email.includes('@auth0.local') &&
                      !user.email.includes('@auth0');
