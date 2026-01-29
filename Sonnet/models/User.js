@@ -41,6 +41,13 @@ const User = sequelize.define('User', {
     defaultValue: true,
     allowNull: false,
   },
+  timezone: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    defaultValue: 'UTC',
+    // IANA timezone format (e.g., America/New_York, Europe/London)
+    // Used for displaying times in user's preferred timezone
+  },
 }, {
   timestamps: true,
   indexes: [
