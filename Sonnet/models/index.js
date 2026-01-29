@@ -9,6 +9,7 @@ const GameReview = require('./GameReview');
 const UserGame = require('./UserGame');
 const UserAvailability = require('./UserAvailability');
 const GroupPromptSettings = require('./GroupPromptSettings');
+const AvailabilityPrompt = require('./AvailabilityPrompt');
 const sequelize = require('../config/database');
 
 
@@ -80,6 +81,18 @@ UserAvailability.belongsTo(User, { foreignKey: 'user_id', targetKey: 'user_id' }
 Group.hasOne(GroupPromptSettings, { foreignKey: 'group_id' });
 GroupPromptSettings.belongsTo(Group, { foreignKey: 'group_id' });
 
+// Availability Prompts (One-to-Many from Group)
+Group.hasMany(AvailabilityPrompt, { foreignKey: 'group_id' });
+AvailabilityPrompt.belongsTo(Group, { foreignKey: 'group_id' });
+
+// Availability Prompts (Many-to-One from Game, optional)
+Game.hasMany(AvailabilityPrompt, { foreignKey: 'game_id' });
+AvailabilityPrompt.belongsTo(Game, { foreignKey: 'game_id' });
+
+// Availability Prompts (Many-to-One from GroupPromptSettings, optional)
+GroupPromptSettings.hasMany(AvailabilityPrompt, { foreignKey: 'created_by_settings_id' });
+AvailabilityPrompt.belongsTo(GroupPromptSettings, { foreignKey: 'created_by_settings_id' });
+
 
 module.exports = {
   User,
@@ -92,5 +105,6 @@ module.exports = {
   UserGame,
   UserAvailability,
   GroupPromptSettings,
+  AvailabilityPrompt,
   sequelize,
 };
