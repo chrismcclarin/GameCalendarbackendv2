@@ -10,6 +10,8 @@ const UserGame = require('./UserGame');
 const UserAvailability = require('./UserAvailability');
 const GroupPromptSettings = require('./GroupPromptSettings');
 const AvailabilityPrompt = require('./AvailabilityPrompt');
+const AvailabilityResponse = require('./AvailabilityResponse');
+const AvailabilitySuggestion = require('./AvailabilitySuggestion');
 const sequelize = require('../config/database');
 
 
@@ -93,6 +95,24 @@ AvailabilityPrompt.belongsTo(Game, { foreignKey: 'game_id' });
 GroupPromptSettings.hasMany(AvailabilityPrompt, { foreignKey: 'created_by_settings_id' });
 AvailabilityPrompt.belongsTo(GroupPromptSettings, { foreignKey: 'created_by_settings_id' });
 
+// Availability Responses (One-to-Many from Prompt)
+AvailabilityPrompt.hasMany(AvailabilityResponse, { foreignKey: 'prompt_id' });
+AvailabilityResponse.belongsTo(AvailabilityPrompt, { foreignKey: 'prompt_id' });
+
+// Availability Responses (Many-to-One from User)
+// Note: Uses sourceKey/targetKey because user_id is STRING (Auth0 ID), not UUID
+User.hasMany(AvailabilityResponse, { foreignKey: 'user_id', sourceKey: 'user_id' });
+AvailabilityResponse.belongsTo(User, { foreignKey: 'user_id', targetKey: 'user_id' });
+
+// Availability Suggestions (One-to-Many from Prompt)
+AvailabilityPrompt.hasMany(AvailabilitySuggestion, { foreignKey: 'prompt_id' });
+AvailabilitySuggestion.belongsTo(AvailabilityPrompt, { foreignKey: 'prompt_id' });
+
+// Availability Suggestions (Many-to-One from Event, optional)
+// Note: alias 'ConvertedEvent' to distinguish from other Event associations
+Event.hasMany(AvailabilitySuggestion, { as: 'ConvertedSuggestions', foreignKey: 'converted_to_event_id' });
+AvailabilitySuggestion.belongsTo(Event, { as: 'ConvertedEvent', foreignKey: 'converted_to_event_id' });
+
 
 module.exports = {
   User,
@@ -106,5 +126,7 @@ module.exports = {
   UserAvailability,
   GroupPromptSettings,
   AvailabilityPrompt,
+  AvailabilityResponse,
+  AvailabilitySuggestion,
   sequelize,
 };
