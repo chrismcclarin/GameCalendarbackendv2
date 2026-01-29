@@ -8,6 +8,7 @@ const UserGroup = require('./UserGroup');
 const GameReview = require('./GameReview');
 const UserGame = require('./UserGame');
 const UserAvailability = require('./UserAvailability');
+const GroupPromptSettings = require('./GroupPromptSettings');
 const sequelize = require('../config/database');
 
 
@@ -75,6 +76,10 @@ UserGame.belongsTo(Game, { foreignKey: 'game_id' });
 User.hasMany(UserAvailability, { foreignKey: 'user_id', sourceKey: 'user_id' });
 UserAvailability.belongsTo(User, { foreignKey: 'user_id', targetKey: 'user_id' });
 
+// Group Prompt Settings (One-to-One)
+Group.hasOne(GroupPromptSettings, { foreignKey: 'group_id' });
+GroupPromptSettings.belongsTo(Group, { foreignKey: 'group_id' });
+
 
 module.exports = {
   User,
@@ -86,5 +91,6 @@ module.exports = {
   GameReview,
   UserGame,
   UserAvailability,
+  GroupPromptSettings,
   sequelize,
 };
