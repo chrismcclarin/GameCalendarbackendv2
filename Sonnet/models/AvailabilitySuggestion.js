@@ -1,0 +1,98 @@
+// models/AvailabilitySuggestion.js
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/database');
+
+const AvailabilitySuggestion = sequelize.define('AvailabilitySuggestion', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true,
+  },
+  prompt_id: {
+    type: DataTypes.UUID,
+    allowNull: false,
+    references: {
+      model: 'AvailabilityPrompts',
+      key: 'id',
+    },
+    onDelete: 'CASCADE',
+    // Suggestions deleted when prompt deleted
+  },
+  suggested_start: {
+    type: DataTypes.DATE,  // TIMESTAMP WITH TIME ZONE
+    allowNull: false,
+    // Start of suggested time slot (UTC)
+  },
+  suggested_end: {
+    type: DataTypes.DATE,  // TIMESTAMP WITH TIME ZONE
+    allowNull: false,
+    // End of suggested time slot (UTC)
+  },
+  participant_count: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    validate: {
+      min: 0,
+    },
+    // How many users are available during this slot
+  },
+  participant_user_ids: {
+    type: DataTypes.JSONB,
+    allowNull: false,
+    defaultValue: [],
+    // Array of user_id strings for users available in this slot
+    // Denormalized for quick access without joins
+  },
+  preferred_count: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 0,
+    validate: {
+      min: 0,
+    },
+    // How many users marked this as 'preferred' vs 'if-need-be'
+  },
+  meets_minimum: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    // Does this slot meet the game's/prompt's min_participants threshold?
+  },
+  score: {
+    type: DataTypes.FLOAT,
+    allowNull: false,
+    defaultValue: 0,
+    // Ranking score: higher = better suggestion
+    // Algorithm: participant_count * 1.0 + preferred_count * 0.5
+    // Suggestions with meets_minimum=true are boosted
+  },
+  converted_to_event_id: {
+    type: DataTypes.UUID,
+    allowNull: true,
+    references: {
+      model: 'Events',
+      key: 'id',
+    },
+    onDelete: 'SET NULL',
+    // When this suggestion becomes an event, track which one
+    // Null until/unless suggestion is converted
+  },
+}, {
+  timestamps: true,
+  indexes: [
+    {
+      fields: ['prompt_id']
+    },
+    {
+      fields: ['meets_minimum']
+    },
+    {
+      fields: ['score']
+    },
+    {
+      fields: ['suggested_start', 'suggested_end']
+    }
+  ]
+});
+
+module.exports = AvailabilitySuggestion;
