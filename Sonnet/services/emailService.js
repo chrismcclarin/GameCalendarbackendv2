@@ -1,216 +1,270 @@
 // services/emailService.js
-// Email service for sending notifications using Porkbun SMTP via nodemailer
-const nodemailer = require('nodemailer');
+// Email service for sending notifications using Resend API
+const { Resend } = require('resend');
 
 class EmailService {
   constructor() {
-    this.emailPassword = process.env.EMAIL_PASSWORD;
-    this.fromEmail = process.env.FROM_EMAIL || 'noreply@nextgamenight.app';
+    this.apiKey = process.env.RESEND_API_KEY;
+    this.fromEmail = process.env.FROM_EMAIL || 'schedule@nextgamenight.app';
     this.frontendUrl = process.env.FRONTEND_URL || process.env.AUTH0_BASE_URL || 'http://localhost:3000';
-    
-    // SMTP configuration for Porkbun - try port 587 first (STARTTLS)
-    this.smtpConfig = {
-      host: 'smtp.porkbun.com',
-      port: 587,
-      secure: false, // Use TLS/STARTTLS (not SSL)
-      connectionTimeout: 10000, // 10 seconds connection timeout
-      socketTimeout: 10000, // 10 seconds socket timeout
-      greetingTimeout: 10000, // 10 seconds greeting timeout
-      auth: {
-        user: 'noreply@nextgamenight.app',
-        pass: this.emailPassword
-      },
-      tls: {
-        // Do not fail on invalid certificates
-        rejectUnauthorized: false
-      }
-    };
-    
-    // Fallback configuration for port 50587 (STARTTLS - alternative port if 587 is blocked)
-    this.smtpConfigFallback1 = {
-      host: 'smtp.porkbun.com',
-      port: 50587,
-      secure: false, // Use STARTTLS (same as 587)
-      connectionTimeout: 10000,
-      socketTimeout: 10000,
-      greetingTimeout: 10000,
-      auth: {
-        user: 'noreply@nextgamenight.app',
-        pass: this.emailPassword
-      },
-      tls: {
-        rejectUnauthorized: false
-      }
-    };
-    
-    // Fallback configuration for port 465 (SSL)
-    this.smtpConfigFallback2 = {
-      host: 'smtp.porkbun.com',
-      port: 465,
-      secure: true, // Use SSL for port 465
-      connectionTimeout: 10000,
-      socketTimeout: 10000,
-      greetingTimeout: 10000,
-      auth: {
-        user: 'noreply@nextgamenight.app',
-        pass: this.emailPassword
-      },
-      tls: {
-        rejectUnauthorized: false
-      }
-    };
-    
-    // Create transporter if password is configured
-    this.transporter = null;
-    this.currentPort = 587; // Track which port we're using
-    
-    if (this.emailPassword) {
-      this.initializeTransporter();
-    } else if (process.env.NODE_ENV === 'production') {
-      console.warn('⚠️  WARNING: EMAIL_PASSWORD not set. Email notifications will be disabled.');
-    }
-    
-    // Log configuration (hide password)
-    if (this.emailPassword) {
-      console.log('📧 Email service configuration:');
-      console.log(`   Host: ${this.smtpConfig.host}`);
-      console.log(`   Port: ${this.smtpConfig.port} (STARTTLS)`);
+
+    // Initialize Resend client if API key is configured
+    this.resend = null;
+    if (this.apiKey) {
+      this.resend = new Resend(this.apiKey);
+      console.log('Resend email service initialized.');
       console.log(`   From: ${this.fromEmail}`);
-      console.log(`   Username: ${this.smtpConfig.auth.user}`);
-      console.log(`   Password: ${'*'.repeat(this.emailPassword.length)} (${this.emailPassword.length} chars)`);
-    }
-  }
-  
-  /**
-   * Initialize transporter with primary config
-   */
-  initializeTransporter() {
-    try {
-      this.transporter = nodemailer.createTransport(this.smtpConfig);
-      this.currentPort = 587;
-    } catch (error) {
-      console.error('Error creating email transporter with port 587:', error.message);
-      this.transporter = null;
-    }
-  }
-  
-  /**
-   * Try fallback ports in order: 50587, then 465
-   */
-  tryFallbackPorts() {
-    // Try port 50587 first (alternative STARTTLS port)
-    if (this.currentPort !== 50587) {
-      try {
-        this.transporter = nodemailer.createTransport(this.smtpConfigFallback1);
-        this.currentPort = 50587;
-        console.log('Switched to SMTP port 50587 (alternative STARTTLS)');
-        return true;
-      } catch (error) {
-        console.log('Port 50587 failed, trying port 465...');
+    } else {
+      console.warn('Resend email service not configured (RESEND_API_KEY not set).');
+      if (process.env.NODE_ENV === 'production') {
+        console.warn('WARNING: Email notifications will be disabled in production!');
       }
     }
-    
-    // Try port 465 (SSL)
-    if (this.currentPort !== 465) {
-      try {
-        this.transporter = nodemailer.createTransport(this.smtpConfigFallback2);
-        this.currentPort = 465;
-        console.log('Switched to SMTP port 465 (SSL)');
-        return true;
-      } catch (error) {
-        console.error('All SMTP ports failed:', error.message);
-      }
-    }
-    
-    return false;
   }
 
   /**
    * Check if email service is configured
+   * @returns {boolean} True if Resend API key is set
    */
   isConfigured() {
-    return !!this.emailPassword && !!this.transporter;
+    return !!this.apiKey && !!this.resend;
   }
 
   /**
-   * Verify SMTP connection (for testing)
+   * Send a single email via Resend API
+   * @param {Object} options - Email options
+   * @param {string|string[]} options.to - Recipient email(s)
+   * @param {string} options.subject - Email subject
+   * @param {React.ReactElement} [options.react] - React Email component
+   * @param {string} [options.html] - HTML content (fallback if no react)
+   * @param {string} [options.text] - Plain text content
+   * @param {string} [options.replyTo] - Reply-to address (typically group owner)
+   * @param {string} [options.groupName] - Group name for from field
+   * @returns {Promise<{success: boolean, id?: string, error?: string}>}
    */
-  async verifyConnection() {
-    if (!this.transporter) {
-      console.error('Email transporter not initialized');
-      return false;
+  async send({ to, subject, react, html, text, replyTo, groupName }) {
+    if (!this.isConfigured()) {
+      console.warn('Email service not configured. Skipping email.');
+      return { success: false, error: 'Email service not configured' };
     }
-    
+
     try {
-      await this.transporter.verify();
-      console.log(`✅ SMTP connection verified (port ${this.currentPort})`);
-      return true;
+      // Format the from field: "[Group Name] via NextGameNight" or just the email
+      const fromName = groupName
+        ? `${groupName} via NextGameNight`
+        : 'NextGameNight';
+      const from = `${fromName} <${this.fromEmail}>`;
+
+      const emailOptions = {
+        from,
+        to: Array.isArray(to) ? to : [to],
+        subject,
+        ...(replyTo && { reply_to: replyTo }),
+      };
+
+      // Prefer React component, fall back to HTML/text
+      if (react) {
+        emailOptions.react = react;
+      } else if (html) {
+        emailOptions.html = html;
+      }
+
+      if (text) {
+        emailOptions.text = text;
+      }
+
+      const result = await this.resend.emails.send(emailOptions);
+
+      if (result.error) {
+        console.error(`Email send failed: ${result.error.message}`);
+        return { success: false, error: result.error.message };
+      }
+
+      console.log(`Email sent successfully. ID: ${result.data?.id}`);
+      return { success: true, id: result.data?.id };
     } catch (error) {
-      console.error(`❌ SMTP connection verification failed (port ${this.currentPort}):`, error.message);
-      
-      // Try fallback ports
-      if (this.tryFallbackPorts()) {
+      console.error(`Email send error: ${error.message}`);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Send emails to multiple recipients (batch send)
+   * Resend allows max 100 emails per batch API call
+   * @param {Array<{email: string, name?: string, data?: Object}>} recipients - List of recipients
+   * @param {Object} options - Email options (shared across all recipients)
+   * @param {string} options.subject - Email subject
+   * @param {React.ReactElement|Function} options.react - React component or function(recipient) => component
+   * @param {string} [options.html] - HTML content fallback
+   * @param {string} [options.text] - Plain text fallback
+   * @param {string} [options.replyTo] - Reply-to address
+   * @param {string} [options.groupName] - Group name for from field
+   * @returns {Promise<{success: boolean, total: number, successful: number, failed: number, results: Array}>}
+   */
+  async sendBatch(recipients, { subject, react, html, text, replyTo, groupName }) {
+    if (!this.isConfigured()) {
+      console.warn('Email service not configured. Skipping batch email.');
+      return {
+        success: false,
+        error: 'Email service not configured',
+        total: recipients.length,
+        successful: 0,
+        failed: recipients.length,
+        results: []
+      };
+    }
+
+    if (!recipients || recipients.length === 0) {
+      return {
+        success: true,
+        total: 0,
+        successful: 0,
+        failed: 0,
+        results: []
+      };
+    }
+
+    // Chunk recipients into batches of 50 (being conservative, Resend allows 100)
+    const chunks = this.chunk(recipients, 50);
+    const allResults = [];
+    let totalSuccessful = 0;
+    let totalFailed = 0;
+
+    for (const chunk of chunks) {
+      // Send emails in parallel within each chunk
+      const chunkPromises = chunk.map(async (recipient) => {
+        const recipientEmail = typeof recipient === 'string' ? recipient : recipient.email;
+        const recipientName = typeof recipient === 'string' ? null : recipient.name;
+
         try {
-          await this.transporter.verify();
-          console.log(`✅ SMTP connection verified (fallback port ${this.currentPort})`);
-          return true;
-        } catch (fallbackError) {
-          console.error(`❌ Fallback SMTP connection (port ${this.currentPort}) also failed:`, fallbackError.message);
-          // Try the other fallback if we haven't tried both
-          if (this.currentPort === 50587 && this.tryFallbackPorts()) {
-            try {
-              await this.transporter.verify();
-              console.log(`✅ SMTP connection verified (final fallback port ${this.currentPort})`);
-              return true;
-            } catch (finalError) {
-              console.error(`❌ All SMTP ports failed:`, finalError.message);
-            }
+          // If react is a function, call it with recipient data to personalize
+          const reactComponent = typeof react === 'function'
+            ? react({ ...recipient, name: recipientName })
+            : react;
+
+          const result = await this.send({
+            to: recipientEmail,
+            subject,
+            react: reactComponent,
+            html,
+            text,
+            replyTo,
+            groupName
+          });
+
+          if (result.success) {
+            totalSuccessful++;
+          } else {
+            totalFailed++;
           }
+
+          return { recipient: recipientEmail, ...result };
+        } catch (error) {
+          totalFailed++;
+          return {
+            recipient: recipientEmail,
+            success: false,
+            error: error.message
+          };
         }
-      }
-      
-      return false;
+      });
+
+      const chunkResults = await Promise.allSettled(chunkPromises);
+
+      chunkResults.forEach((result) => {
+        if (result.status === 'fulfilled') {
+          allResults.push(result.value);
+        } else {
+          allResults.push({
+            recipient: 'unknown',
+            success: false,
+            error: result.reason?.message || 'Unknown error'
+          });
+          totalFailed++;
+        }
+      });
     }
+
+    console.log(`Batch email results: ${totalSuccessful} sent, ${totalFailed} failed`);
+
+    return {
+      success: totalSuccessful > 0,
+      total: recipients.length,
+      successful: totalSuccessful,
+      failed: totalFailed,
+      results: allResults
+    };
   }
 
   /**
-   * Retry function with exponential backoff
+   * Split array into chunks of specified size
+   * @param {Array} array - Array to chunk
+   * @param {number} size - Chunk size
+   * @returns {Array<Array>} Array of chunks
    */
-  async retryWithBackoff(fn, maxRetries = 3, baseDelay = 1000) {
-    let lastError;
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      try {
-        return await fn();
-      } catch (error) {
-        lastError = error;
-        if (attempt < maxRetries - 1) {
-          const delay = baseDelay * Math.pow(2, attempt); // Exponential backoff: 1s, 2s, 4s
-          console.log(`Email send attempt ${attempt + 1} failed, retrying in ${delay}ms... (${error.message})`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-        }
-      }
+  chunk(array, size) {
+    const chunks = [];
+    for (let i = 0; i < array.length; i += size) {
+      chunks.push(array.slice(i, i + size));
     }
-    throw lastError;
+    return chunks;
   }
 
   /**
-   * Generate email template for game session notification
+   * Format event date for display
+   * @param {Date|string} date - Date to format
+   * @returns {string} Formatted date string
    */
-  generateGameSessionEmailTemplate(eventData) {
-    const { gameName, groupName, startDate, startTime, durationMinutes, location, comments, eventUrl, recipientName } = eventData;
-    
-    // Format date for display
-    const eventDate = new Date(startDate);
-    const formattedDate = eventDate.toLocaleDateString('en-US', {
+  formatEventDate(date) {
+    const eventDate = new Date(date);
+    return eventDate.toLocaleDateString('en-US', {
       weekday: 'long',
       year: 'numeric',
       month: 'long',
       day: 'numeric'
     });
-    
-    // Calculate end time
+  }
+
+  /**
+   * Calculate end time from start time and duration
+   * @param {string} startTime - Start time in HH:MM format
+   * @param {number} durationMinutes - Duration in minutes
+   * @returns {string} End time in HH:MM format
+   */
+  calculateEndTime(startTime, durationMinutes) {
+    if (!startTime || !durationMinutes) return '';
+
+    try {
+      const [hours, minutes] = startTime.split(':').map(Number);
+      const startDate = new Date();
+      startDate.setHours(hours, minutes, 0, 0);
+
+      const endDate = new Date(startDate.getTime() + durationMinutes * 60000);
+      const endHours = String(endDate.getHours()).padStart(2, '0');
+      const endMinutes = String(endDate.getMinutes()).padStart(2, '0');
+
+      return `${endHours}:${endMinutes}`;
+    } catch (error) {
+      console.error('Error calculating end time:', error);
+      return '';
+    }
+  }
+
+  // ============================================
+  // Legacy methods (to be updated in Phase 7)
+  // These maintain API compatibility with existing code
+  // ============================================
+
+  /**
+   * Generate email template for game session notification
+   * @deprecated Use React Email templates instead (Phase 2, Plan 2)
+   */
+  generateGameSessionEmailTemplate(eventData) {
+    const { gameName, groupName, startDate, startTime, durationMinutes, location, comments, eventUrl, recipientName } = eventData;
+
+    const formattedDate = this.formatEventDate(startDate);
     const endTime = this.calculateEndTime(startTime, durationMinutes);
-    
+
     const html = `
 <!DOCTYPE html>
 <html>
@@ -232,13 +286,13 @@ class EmailService {
 <body>
   <div class="container">
     <div class="header">
-      <h1>🎲 New Game Session Scheduled!</h1>
+      <h1>New Game Session Scheduled!</h1>
     </div>
     <div class="content">
       <p>Hi ${recipientName || 'there'},</p>
-      
+
       <p>A new game session has been scheduled for your group <strong>${groupName}</strong>.</p>
-      
+
       <div class="event-details">
         <div class="event-detail-row">
           <span class="event-detail-label">Game:</span>
@@ -271,13 +325,13 @@ class EmailService {
         </div>
         ` : ''}
       </div>
-      
+
       <div style="text-align: center;">
         <a href="${eventUrl}" class="button">View Event Details</a>
       </div>
-      
+
       <p>We hope to see you there!</p>
-      
+
       <div class="footer">
         <p>This is an automated notification from PeriodicTableTop.</p>
         <p>You can manage your notification preferences in your <a href="${this.frontendUrl}/userProfile">profile settings</a>.</p>
@@ -288,7 +342,6 @@ class EmailService {
 </html>
     `.trim();
 
-    // Plain text version
     const text = `
 New Game Session Scheduled!
 
@@ -317,167 +370,42 @@ You can manage your notification preferences in your profile: ${this.frontendUrl
   }
 
   /**
-   * Calculate end time from start time and duration
-   */
-  calculateEndTime(startTime, durationMinutes) {
-    if (!startTime || !durationMinutes) return '';
-    
-    try {
-      const [hours, minutes] = startTime.split(':').map(Number);
-      const startDate = new Date();
-      startDate.setHours(hours, minutes, 0, 0);
-      
-      const endDate = new Date(startDate.getTime() + durationMinutes * 60000);
-      const endHours = String(endDate.getHours()).padStart(2, '0');
-      const endMinutes = String(endDate.getMinutes()).padStart(2, '0');
-      
-      return `${endHours}:${endMinutes}`;
-    } catch (error) {
-      console.error('Error calculating end time:', error);
-      return '';
-    }
-  }
-
-  /**
-   * Send game session notification email with retry logic
+   * Send game session notification email
+   * @deprecated Will be updated to use React Email templates in Phase 7
    */
   async sendGameSessionNotification(recipientEmail, recipientName, eventData) {
-    if (!this.isConfigured()) {
-      console.warn('Email service not configured. Skipping email notification.');
-      return { success: false, error: 'Email service not configured' };
-    }
-
     const { html, text } = this.generateGameSessionEmailTemplate({
       ...eventData,
       recipientName
     });
 
-    const mailOptions = {
-      from: `"PeriodicTableTop" <${this.fromEmail}>`,
+    return this.send({
       to: recipientEmail,
       subject: `New Game Session: ${eventData.gameName} - ${eventData.groupName}`,
-      text: text,
-      html: html,
-    };
-
-    try {
-      // Send with retry logic
-      const info = await this.retryWithBackoff(async () => {
-        return await this.transporter.sendMail(mailOptions);
-      });
-      
-      if (process.env.NODE_ENV === 'development') {
-        console.log(`✅ Email sent to ${recipientEmail} for game session: ${eventData.gameName}`);
-        console.log(`   Message ID: ${info.messageId}`);
-        console.log(`   Using port: ${this.currentPort}`);
-      }
-      
-      return { success: true, messageId: info.messageId };
-    } catch (error) {
-      console.error(`❌ Error sending email to ${recipientEmail}:`, error.message);
-      
-      // Log detailed error in development
-      if (process.env.NODE_ENV === 'development') {
-        console.error('SMTP error details:', {
-          message: error.message,
-          code: error.code,
-          command: error.command,
-          response: error.response,
-          usingPort: this.currentPort
-        });
-      }
-      
-      // If connection error, try fallback ports
-      if (error.code === 'ETIMEDOUT' || error.code === 'ECONNREFUSED' || error.code === 'ECONNRESET') {
-        console.log(`Connection error on port ${this.currentPort}, attempting fallback ports...`);
-        if (this.tryFallbackPorts()) {
-          // Retry send with fallback
-          try {
-            const info = await this.retryWithBackoff(async () => {
-              return await this.transporter.sendMail(mailOptions);
-            });
-            
-            console.log(`✅ Email sent using fallback configuration (port ${this.currentPort})`);
-            return { success: true, messageId: info.messageId };
-          } catch (fallbackError) {
-            console.error(`❌ Fallback SMTP configuration (port ${this.currentPort}) also failed:`, fallbackError.message);
-            // Try the other fallback if we haven't tried both
-            if (this.currentPort === 50587) {
-              if (this.tryFallbackPorts()) {
-                try {
-                  const info = await this.retryWithBackoff(async () => {
-                    return await this.transporter.sendMail(mailOptions);
-                  });
-                  console.log(`✅ Email sent using final fallback (port ${this.currentPort})`);
-                  return { success: true, messageId: info.messageId };
-                } catch (finalError) {
-                  console.error(`❌ All SMTP ports failed:`, finalError.message);
-                }
-              }
-            }
-          }
-        }
-      }
-      
-      return { success: false, error: error.message };
-    }
+      html,
+      text,
+      groupName: eventData.groupName
+    });
   }
 
   /**
    * Send email notification to multiple recipients
-   * Handles failures gracefully - continues sending even if some fail
+   * @deprecated Will be updated to use React Email templates in Phase 7
    */
   async sendGameSessionNotificationToMultiple(recipients, eventData) {
-    if (!this.isConfigured()) {
-      console.warn('Email service not configured. Skipping email notifications.');
-      return { success: false, error: 'Email service not configured' };
-    }
+    const recipientList = recipients.map(r => ({
+      email: r.email,
+      name: r.name || r.username
+    }));
 
-    const results = [];
-    
-    // Send emails in parallel, but handle errors gracefully
-    const emailPromises = recipients.map(async (recipient) => {
-      try {
-        const result = await this.sendGameSessionNotification(
-          recipient.email,
-          recipient.name || recipient.username,
-          eventData
-        );
-        return { recipient: recipient.email, ...result };
-      } catch (error) {
-        console.error(`Failed to send email to ${recipient.email}:`, error.message);
-        return { recipient: recipient.email, success: false, error: error.message };
-      }
+    const { html, text } = this.generateGameSessionEmailTemplate(eventData);
+
+    return this.sendBatch(recipientList, {
+      subject: `New Game Session: ${eventData.gameName} - ${eventData.groupName}`,
+      html,
+      text,
+      groupName: eventData.groupName
     });
-
-    const emailResults = await Promise.allSettled(emailPromises);
-    
-    emailResults.forEach((result, index) => {
-      if (result.status === 'fulfilled') {
-        results.push(result.value);
-      } else {
-        console.error(`Email promise rejected for recipient ${index}:`, result.reason);
-        results.push({ recipient: recipients[index]?.email || 'unknown', success: false, error: result.reason?.message || 'Unknown error' });
-      }
-    });
-
-    const successCount = results.filter(r => r.success).length;
-    const failureCount = results.length - successCount;
-
-    if (process.env.NODE_ENV === 'development' || failureCount > 0) {
-      console.log(`Email notification results: ${successCount} sent, ${failureCount} failed`);
-      if (successCount > 0) {
-        console.log(`Using SMTP port: ${this.currentPort}`);
-      }
-    }
-
-    return {
-      success: successCount > 0,
-      total: results.length,
-      successful: successCount,
-      failed: failureCount,
-      results: results
-    };
   }
 }
 
