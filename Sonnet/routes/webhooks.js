@@ -1,95 +1,132 @@
 // routes/webhooks.js
-// Webhook handlers for external service callbacks (Resend delivery events)
+// Webhook handlers for external service callbacks (SendGrid delivery events)
 const express = require('express');
 const crypto = require('crypto');
 const router = express.Router();
 
 /**
- * Verify Resend webhook signature using HMAC-SHA256
- * @param {Object} req - Express request object
+ * Verify SendGrid webhook signature using ECDSA
+ * SendGrid uses the x-twilio-email-event-webhook-signature header
+ * @param {string} publicKey - SendGrid verification key from dashboard
+ * @param {string} payload - Raw request body as string
+ * @param {string} signature - Signature from header
+ * @param {string} timestamp - Timestamp from header
  * @returns {boolean} True if signature is valid
  */
-function verifyResendSignature(req) {
-  const signature = req.headers['resend-signature'];
-  const secret = process.env.RESEND_WEBHOOK_SECRET;
-
-  // Reject if secret not configured (security requirement)
-  if (!secret) {
-    console.warn('RESEND_WEBHOOK_SECRET not configured. Rejecting webhook.');
-    return false;
-  }
-
-  // Reject if signature header missing
-  if (!signature) {
-    console.warn('Missing resend-signature header on webhook request.');
+function verifySendGridSignature(publicKey, payload, signature, timestamp) {
+  if (!publicKey || !signature || !timestamp) {
     return false;
   }
 
   try {
-    // Compute expected signature
-    const payload = JSON.stringify(req.body);
-    const expected = crypto
-      .createHmac('sha256', secret)
-      .update(payload)
-      .digest('hex');
+    const timestampPayload = timestamp + payload;
+    const decodedSignature = Buffer.from(signature, 'base64');
 
-    // Constant-time comparison to prevent timing attacks
-    return crypto.timingSafeEqual(
-      Buffer.from(signature),
-      Buffer.from(expected)
+    const verifier = crypto.createVerify('sha256');
+    verifier.update(timestampPayload);
+
+    return verifier.verify(
+      {
+        key: publicKey,
+        format: 'pem',
+        type: 'spki'
+      },
+      decodedSignature
     );
   } catch (error) {
-    console.error('Error verifying webhook signature:', error.message);
+    console.error('Error verifying SendGrid webhook signature:', error.message);
     return false;
   }
 }
 
 /**
- * Handle Resend webhook events
- * Events: email.sent, email.delivered, email.bounced, email.delivery_delayed, email.complained
+ * Handle SendGrid webhook events
+ * Events: delivered, bounce, dropped, deferred, open, click, spam_report, unsubscribe, etc.
  *
- * POST /api/webhooks/resend
+ * POST /api/webhooks/sendgrid
  */
+router.post('/sendgrid', express.json(), (req, res) => {
+  const publicKey = process.env.SENDGRID_WEBHOOK_VERIFICATION_KEY;
+  const signature = req.headers['x-twilio-email-event-webhook-signature'];
+  const timestamp = req.headers['x-twilio-email-event-webhook-timestamp'];
+
+  // Verify signature if verification key is configured
+  if (publicKey) {
+    const payload = JSON.stringify(req.body);
+    if (!verifySendGridSignature(publicKey, payload, signature, timestamp)) {
+      console.warn('SendGrid webhook signature verification failed.');
+      return res.status(401).json({ error: 'Invalid signature' });
+    }
+  } else {
+    // Log warning but allow through in development (for testing)
+    if (process.env.NODE_ENV === 'production') {
+      console.warn('SENDGRID_WEBHOOK_VERIFICATION_KEY not configured. Rejecting webhook in production.');
+      return res.status(401).json({ error: 'Webhook verification not configured' });
+    }
+    console.warn('SENDGRID_WEBHOOK_VERIFICATION_KEY not configured. Allowing webhook in development.');
+  }
+
+  // SendGrid sends an array of events
+  const events = Array.isArray(req.body) ? req.body : [req.body];
+
+  events.forEach((event) => {
+    const { event: eventType, email, sg_message_id, reason } = event;
+
+    // Log event based on type
+    // These logs are admin-only visibility (console/server logs)
+    switch (eventType) {
+      case 'processed':
+        console.log(`[SendGrid] Email processed - ID: ${sg_message_id}, To: ${maskEmail(email)}`);
+        break;
+
+      case 'delivered':
+        console.log(`[SendGrid] Email delivered - ID: ${sg_message_id}, To: ${maskEmail(email)}`);
+        break;
+
+      case 'bounce':
+        console.error(`[SendGrid] Email bounced - ID: ${sg_message_id}, To: ${maskEmail(email)}, Reason: ${reason || 'Unknown'}`);
+        // TODO: In future phases, mark email address as invalid in database
+        break;
+
+      case 'dropped':
+        console.error(`[SendGrid] Email dropped - ID: ${sg_message_id}, To: ${maskEmail(email)}, Reason: ${reason || 'Unknown'}`);
+        break;
+
+      case 'deferred':
+        console.warn(`[SendGrid] Email deferred - ID: ${sg_message_id}, To: ${maskEmail(email)}`);
+        break;
+
+      case 'spamreport':
+        console.warn(`[SendGrid] Spam report received - ID: ${sg_message_id}, To: ${maskEmail(email)}`);
+        // TODO: In future phases, unsubscribe user from email notifications
+        break;
+
+      case 'unsubscribe':
+        console.warn(`[SendGrid] Unsubscribe request - ID: ${sg_message_id}, To: ${maskEmail(email)}`);
+        // TODO: In future phases, update user preferences
+        break;
+
+      case 'open':
+        console.log(`[SendGrid] Email opened - ID: ${sg_message_id}, To: ${maskEmail(email)}`);
+        break;
+
+      case 'click':
+        console.log(`[SendGrid] Link clicked - ID: ${sg_message_id}, To: ${maskEmail(email)}`);
+        break;
+
+      default:
+        console.log(`[SendGrid] Event: ${eventType} - ID: ${sg_message_id}`);
+    }
+  });
+
+  // Always return 200 to acknowledge receipt (prevents SendGrid retries)
+  res.status(200).json({ received: true, count: events.length });
+});
+
+// Keep Resend endpoint for backward compatibility (can be removed later)
 router.post('/resend', express.json(), (req, res) => {
-  // Verify signature first (CRITICAL for security)
-  if (!verifyResendSignature(req)) {
-    console.warn('Webhook signature verification failed.');
-    return res.status(401).json({ error: 'Invalid signature' });
-  }
-
-  const { type, data } = req.body;
-
-  // Log event based on type
-  // These logs are admin-only visibility (console/server logs)
-  switch (type) {
-    case 'email.sent':
-      console.log(`[Resend] Email sent - ID: ${data?.email_id}, To: ${maskEmail(data?.to)}`);
-      break;
-
-    case 'email.delivered':
-      console.log(`[Resend] Email delivered - ID: ${data?.email_id}, To: ${maskEmail(data?.to)}`);
-      break;
-
-    case 'email.bounced':
-      console.error(`[Resend] Email bounced - ID: ${data?.email_id}, To: ${maskEmail(data?.to)}, Reason: ${data?.bounce?.message || 'Unknown'}`);
-      // TODO: In future phases, mark email address as invalid in database
-      break;
-
-    case 'email.delivery_delayed':
-      console.warn(`[Resend] Email delivery delayed - ID: ${data?.email_id}, To: ${maskEmail(data?.to)}`);
-      break;
-
-    case 'email.complained':
-      console.warn(`[Resend] Spam complaint received - ID: ${data?.email_id}, To: ${maskEmail(data?.to)}`);
-      // TODO: In future phases, unsubscribe user from email notifications
-      break;
-
-    default:
-      console.log(`[Resend] Unknown event type: ${type}`);
-  }
-
-  // Always return 200 to acknowledge receipt (prevents Resend retries)
-  res.status(200).json({ received: true });
+  console.warn('[Webhooks] Received request to deprecated /resend endpoint. Use /sendgrid instead.');
+  res.status(200).json({ received: true, deprecated: true });
 });
 
 /**

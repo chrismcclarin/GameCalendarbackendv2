@@ -1,21 +1,20 @@
 // services/emailService.js
-// Email service for sending notifications using Resend API
-const { Resend } = require('resend');
+// Email service for sending notifications using SendGrid API
+const sgMail = require('@sendgrid/mail');
 
 class EmailService {
   constructor() {
-    this.apiKey = process.env.RESEND_API_KEY;
+    this.apiKey = process.env.SENDGRID_API_KEY;
     this.fromEmail = process.env.FROM_EMAIL || 'schedule@nextgamenight.app';
     this.frontendUrl = process.env.FRONTEND_URL || process.env.AUTH0_BASE_URL || 'http://localhost:3000';
 
-    // Initialize Resend client if API key is configured
-    this.resend = null;
+    // Initialize SendGrid client if API key is configured
     if (this.apiKey) {
-      this.resend = new Resend(this.apiKey);
-      console.log('Resend email service initialized.');
+      sgMail.setApiKey(this.apiKey);
+      console.log('SendGrid email service initialized.');
       console.log(`   From: ${this.fromEmail}`);
     } else {
-      console.warn('Resend email service not configured (RESEND_API_KEY not set).');
+      console.warn('SendGrid email service not configured (SENDGRID_API_KEY not set).');
       if (process.env.NODE_ENV === 'production') {
         console.warn('WARNING: Email notifications will be disabled in production!');
       }
@@ -24,25 +23,24 @@ class EmailService {
 
   /**
    * Check if email service is configured
-   * @returns {boolean} True if Resend API key is set
+   * @returns {boolean} True if SendGrid API key is set
    */
   isConfigured() {
-    return !!this.apiKey && !!this.resend;
+    return !!this.apiKey;
   }
 
   /**
-   * Send a single email via Resend API
+   * Send a single email via SendGrid API
    * @param {Object} options - Email options
    * @param {string|string[]} options.to - Recipient email(s)
    * @param {string} options.subject - Email subject
-   * @param {React.ReactElement} [options.react] - React Email component
-   * @param {string} [options.html] - HTML content (fallback if no react)
+   * @param {string} [options.html] - HTML content
    * @param {string} [options.text] - Plain text content
    * @param {string} [options.replyTo] - Reply-to address (typically group owner)
    * @param {string} [options.groupName] - Group name for from field
    * @returns {Promise<{success: boolean, id?: string, error?: string}>}
    */
-  async send({ to, subject, react, html, text, replyTo, groupName }) {
+  async send({ to, subject, html, text, replyTo, groupName }) {
     if (!this.isConfigured()) {
       console.warn('Email service not configured. Skipping email.');
       return { success: false, error: 'Email service not configured' };
@@ -53,55 +51,45 @@ class EmailService {
       const fromName = groupName
         ? `${groupName} via NextGameNight`
         : 'NextGameNight';
-      const from = `${fromName} <${this.fromEmail}>`;
 
-      const emailOptions = {
-        from,
+      const msg = {
         to: Array.isArray(to) ? to : [to],
+        from: {
+          email: this.fromEmail,
+          name: fromName
+        },
         subject,
-        ...(replyTo && { reply_to: replyTo }),
+        ...(html && { html }),
+        ...(text && { text }),
+        ...(replyTo && { replyTo }),
       };
 
-      // Prefer React component, fall back to HTML/text
-      if (react) {
-        emailOptions.react = react;
-      } else if (html) {
-        emailOptions.html = html;
-      }
+      const response = await sgMail.send(msg);
 
-      if (text) {
-        emailOptions.text = text;
-      }
-
-      const result = await this.resend.emails.send(emailOptions);
-
-      if (result.error) {
-        console.error(`Email send failed: ${result.error.message}`);
-        return { success: false, error: result.error.message };
-      }
-
-      console.log(`Email sent successfully. ID: ${result.data?.id}`);
-      return { success: true, id: result.data?.id };
+      // SendGrid returns message ID in headers
+      const messageId = response[0]?.headers?.['x-message-id'];
+      console.log(`Email sent successfully. ID: ${messageId || 'unknown'}`);
+      return { success: true, id: messageId };
     } catch (error) {
-      console.error(`Email send error: ${error.message}`);
-      return { success: false, error: error.message };
+      const errorMessage = error.response?.body?.errors?.[0]?.message || error.message;
+      console.error(`Email send failed: ${errorMessage}`);
+      return { success: false, error: errorMessage };
     }
   }
 
   /**
    * Send emails to multiple recipients (batch send)
-   * Resend allows max 100 emails per batch API call
+   * SendGrid allows max 1000 emails per API call
    * @param {Array<{email: string, name?: string, data?: Object}>} recipients - List of recipients
    * @param {Object} options - Email options (shared across all recipients)
    * @param {string} options.subject - Email subject
-   * @param {React.ReactElement|Function} options.react - React component or function(recipient) => component
-   * @param {string} [options.html] - HTML content fallback
+   * @param {string} [options.html] - HTML content
    * @param {string} [options.text] - Plain text fallback
    * @param {string} [options.replyTo] - Reply-to address
    * @param {string} [options.groupName] - Group name for from field
    * @returns {Promise<{success: boolean, total: number, successful: number, failed: number, results: Array}>}
    */
-  async sendBatch(recipients, { subject, react, html, text, replyTo, groupName }) {
+  async sendBatch(recipients, { subject, html, text, replyTo, groupName }) {
     if (!this.isConfigured()) {
       console.warn('Email service not configured. Skipping batch email.');
       return {
@@ -124,8 +112,8 @@ class EmailService {
       };
     }
 
-    // Chunk recipients into batches of 50 (being conservative, Resend allows 100)
-    const chunks = this.chunk(recipients, 50);
+    // Chunk recipients into batches of 100 (being conservative, SendGrid allows 1000)
+    const chunks = this.chunk(recipients, 100);
     const allResults = [];
     let totalSuccessful = 0;
     let totalFailed = 0;
@@ -134,18 +122,11 @@ class EmailService {
       // Send emails in parallel within each chunk
       const chunkPromises = chunk.map(async (recipient) => {
         const recipientEmail = typeof recipient === 'string' ? recipient : recipient.email;
-        const recipientName = typeof recipient === 'string' ? null : recipient.name;
 
         try {
-          // If react is a function, call it with recipient data to personalize
-          const reactComponent = typeof react === 'function'
-            ? react({ ...recipient, name: recipientName })
-            : react;
-
           const result = await this.send({
             to: recipientEmail,
             subject,
-            react: reactComponent,
             html,
             text,
             replyTo,
