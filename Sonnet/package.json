@@ -16,6 +16,7 @@
         "seed": "node scripts/seed-sample-data.js"
     },
     "dependencies": {
+        "@react-email/components": "^1.0.6",
         "@sentry/node": "^8.0.0",
         "axios": "^1.10.0",
         "cors": "^2.8.5",
@@ -31,6 +32,10 @@
         "nodemailer": "^7.0.12",
         "pg": "^8.11.3",
         "pg-hstore": "^2.3.4",
+        "react": "^18.3.1",
+        "react-dom": "^18.3.1",
+        "react-email": "^5.2.5",
+        "resend": "^4.8.0",
         "sequelize": "^6.35.0",
         "xml2js": "^0.6.2"
     },
