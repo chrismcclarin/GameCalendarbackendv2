@@ -13,7 +13,8 @@
         "test:coverage": "jest --coverage",
         "test:setup": "node scripts/setup-test-db.js",
         "db:create": "node scripts/create-database.js",
-        "seed": "node scripts/seed-sample-data.js"
+        "seed": "node scripts/seed-sample-data.js",
+        "email:dev": "npx react-email dev --dir emails --port 3001"
     },
     "dependencies": {
         "@react-email/components": "^1.0.6",
