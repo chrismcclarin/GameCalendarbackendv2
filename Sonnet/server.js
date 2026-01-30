@@ -50,6 +50,7 @@ const userGameRoutes = require('./routes/userGames');
 const feedbackRoutes = require('./routes/feedback');
 const googleAuthRoutes = require('./routes/googleAuth');
 const availabilityRoutes = require('./routes/availability');
+const webhooksRoutes = require('./routes/webhooks');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -212,6 +213,7 @@ app.use('/api/', apiLimiter);
 // Public routes (no auth required)
 app.use('/api/games', gameRoutes); // Game search is public
 app.use('/api/feedback', feedbackLimiter, optionalAuth, feedbackRoutes); // Feedback with strict rate limiting
+app.use('/api/webhooks', webhooksRoutes); // External service webhooks (Resend, etc.)
 
 // Protected routes (require Auth0 token)
 // Apply write operation rate limiting only to POST/PUT/DELETE requests
