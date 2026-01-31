@@ -53,6 +53,41 @@ const strictLimiter = rateLimit({
   skip: (req) => isDevelopment && (req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1'),
 });
 
+// Magic token validation rate limiter (per TOKEN-04)
+// 5 failed attempts per 15 minutes per IP+token prefix
+const MAGIC_TOKEN_LIMIT = isDevelopment ? 50 : 5;
+
+// Helper to normalize IP addresses (IPv6 loopback variants -> consistent format)
+const normalizeIp = (ip) => {
+  if (!ip) return 'unknown';
+  // Normalize IPv6 loopback and IPv4-mapped-IPv6 to IPv4
+  if (ip === '::1' || ip === '::ffff:127.0.0.1') return '127.0.0.1';
+  // Strip IPv4-mapped IPv6 prefix if present
+  if (ip.startsWith('::ffff:')) return ip.substring(7);
+  return ip;
+};
+
+const magicTokenLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,      // 15 minutes
+  max: MAGIC_TOKEN_LIMIT,
+  skipSuccessfulRequests: true,   // Only count failures
+  message: {
+    error: 'Too many attempts. Please try again later.',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  // Key by normalized IP + first 16 chars of token (prevents brute force across tokens)
+  keyGenerator: (req) => {
+    const token = req.query.token || req.body.token || '';
+    const tokenPrefix = token.substring(0, 16);
+    const normalizedIp = normalizeIp(req.ip);
+    return `magic:${normalizedIp}:${tokenPrefix}`;
+  },
+  skip: (req) => isDevelopment && (req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1'),
+  // Disable keyGenerator IP validation since we handle IPv6 normalization manually
+  validate: { default: true, keyGeneratorIpFallback: false },
+});
+
 // Middleware that only applies strict limiter to write operations (POST, PUT, DELETE)
 // GET requests will use the general apiLimiter instead
 const writeOperationLimiter = (req, res, next) => {
@@ -70,5 +105,6 @@ module.exports = {
   feedbackLimiter,
   strictLimiter,
   writeOperationLimiter,
+  magicTokenLimiter,
 };
 
