@@ -13,6 +13,7 @@ const AvailabilityPrompt = require('./AvailabilityPrompt');
 const AvailabilityResponse = require('./AvailabilityResponse');
 const AvailabilitySuggestion = require('./AvailabilitySuggestion');
 const MagicToken = require('./MagicToken');
+const TokenAnalytics = require('./TokenAnalytics');
 const sequelize = require('../config/database');
 
 
@@ -139,5 +140,6 @@ module.exports = {
   AvailabilityResponse,
   AvailabilitySuggestion,
   MagicToken,
+  TokenAnalytics,
   sequelize,
 };
