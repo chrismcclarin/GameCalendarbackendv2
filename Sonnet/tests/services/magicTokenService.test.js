@@ -22,15 +22,17 @@ describe('magicTokenService', () => {
     await sequelize.sync({ force: true });
 
     // Create test user
+    // Note: User model has 'username' not 'name'. Service uses 'name || username' for display.
     testUser = await User.create({
       user_id: 'auth0|test123',
-      name: 'Test User',
+      username: 'Test User',  // This is what gets stored and used for display
       email: 'test@example.com'
     });
 
     // Create test group
     testGroup = await Group.create({
-      name: 'Test Group'
+      name: 'Test Group',
+      group_id: 'test-group-001'
     });
 
     // Create test prompt
@@ -219,26 +221,30 @@ describe('magicTokenService', () => {
 
     describe('grace period', () => {
       it('returns invalid for expired token without grace period context', async () => {
-        // Create an already-expired token
+        // Create a token that expired 6 minutes ago (beyond 5-min grace and 30-sec clock tolerance)
+        const expiresAt = new Date(Date.now() - 6 * 60 * 1000); // 6 min ago
+        const tokenId = 'expired-token-no-grace';
+
         const expiredToken = jwt.sign(
           {
-            jti: 'expired-token-no-grace',
+            jti: tokenId,
             sub: testUser.user_id,
-            name: testUser.name,
+            name: testUser.username,
             prompt_id: testPrompt.id,
             aud: 'availability-form',
-            iss: 'nextgamenight.app'
+            iss: 'nextgamenight.app',
+            exp: Math.floor(expiresAt.getTime() / 1000)
           },
           process.env.MAGIC_TOKEN_SECRET,
-          { expiresIn: '-1s', algorithm: 'HS256' } // Already expired
+          { algorithm: 'HS256' }
         );
 
         // Create database record with past expiry
         await MagicToken.create({
-          token_id: 'expired-token-no-grace',
+          token_id: tokenId,
           user_id: testUser.user_id,
           prompt_id: testPrompt.id,
-          expires_at: new Date(Date.now() - 1000), // 1 second ago
+          expires_at: expiresAt,
           status: 'active',
           usage_count: 0
         });
@@ -249,7 +255,7 @@ describe('magicTokenService', () => {
       });
 
       it('returns valid with grace period when form loaded before expiry', async () => {
-        // Create a token that expired 2 minutes ago
+        // Create a token that expired 2 minutes ago (within 5-min grace period)
         const expiresAt = new Date(Date.now() - 2 * 60 * 1000); // 2 min ago
         const tokenId = 'grace-period-test-token';
 
@@ -257,20 +263,10 @@ describe('magicTokenService', () => {
           {
             jti: tokenId,
             sub: testUser.user_id,
-            name: testUser.name,
+            name: testUser.username,
             prompt_id: testPrompt.id,
             aud: 'availability-form',
-            iss: 'nextgamenight.app'
-          },
-          process.env.MAGIC_TOKEN_SECRET,
-          { algorithm: 'HS256' }
-        );
-
-        // Manually set exp claim to the past
-        const decoded = jwt.decode(expiredToken);
-        const expiredTokenWithPastExp = jwt.sign(
-          {
-            ...decoded,
+            iss: 'nextgamenight.app',
             exp: Math.floor(expiresAt.getTime() / 1000)
           },
           process.env.MAGIC_TOKEN_SECRET,
@@ -287,10 +283,10 @@ describe('magicTokenService', () => {
           usage_count: 0
         });
 
-        // Form was loaded 10 minutes ago (before expiry)
+        // Form was loaded 10 minutes ago (before expiry since expiry was 2 min ago)
         const formLoadedAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
 
-        const result = await validateToken(expiredTokenWithPastExp, formLoadedAt);
+        const result = await validateToken(expiredToken, formLoadedAt);
         expect(result.valid).toBe(true);
         expect(result.graceUsed).toBe(true);
       });
@@ -304,7 +300,7 @@ describe('magicTokenService', () => {
           {
             jti: tokenId,
             sub: testUser.user_id,
-            name: testUser.name,
+            name: testUser.username,
             prompt_id: testPrompt.id,
             aud: 'availability-form',
             iss: 'nextgamenight.app',
@@ -341,7 +337,7 @@ describe('magicTokenService', () => {
           {
             jti: tokenId,
             sub: testUser.user_id,
-            name: testUser.name,
+            name: testUser.username,
             prompt_id: testPrompt.id,
             aud: 'availability-form',
             iss: 'nextgamenight.app',
