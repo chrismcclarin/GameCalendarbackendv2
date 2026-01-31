@@ -12,6 +12,7 @@ const GroupPromptSettings = require('./GroupPromptSettings');
 const AvailabilityPrompt = require('./AvailabilityPrompt');
 const AvailabilityResponse = require('./AvailabilityResponse');
 const AvailabilitySuggestion = require('./AvailabilitySuggestion');
+const MagicToken = require('./MagicToken');
 const sequelize = require('../config/database');
 
 
@@ -113,6 +114,15 @@ AvailabilitySuggestion.belongsTo(AvailabilityPrompt, { foreignKey: 'prompt_id' }
 Event.hasMany(AvailabilitySuggestion, { as: 'ConvertedSuggestions', foreignKey: 'converted_to_event_id' });
 AvailabilitySuggestion.belongsTo(Event, { as: 'ConvertedEvent', foreignKey: 'converted_to_event_id' });
 
+// Magic Tokens (One-to-Many from User)
+// Note: Uses sourceKey/targetKey because user_id is STRING (Auth0 ID), not UUID
+User.hasMany(MagicToken, { foreignKey: 'user_id', sourceKey: 'user_id' });
+MagicToken.belongsTo(User, { foreignKey: 'user_id', targetKey: 'user_id' });
+
+// Magic Tokens (One-to-Many from AvailabilityPrompt)
+AvailabilityPrompt.hasMany(MagicToken, { foreignKey: 'prompt_id' });
+MagicToken.belongsTo(AvailabilityPrompt, { foreignKey: 'prompt_id' });
+
 
 module.exports = {
   User,
@@ -128,5 +138,6 @@ module.exports = {
   AvailabilityPrompt,
   AvailabilityResponse,
   AvailabilitySuggestion,
+  MagicToken,
   sequelize,
 };
