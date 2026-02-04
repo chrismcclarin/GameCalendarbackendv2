@@ -5,6 +5,7 @@ const express = require('express');
 const router = express.Router();
 const { validateToken } = require('../services/magicTokenService');
 const { magicTokenLimiter } = require('../middleware/rateLimiter');
+const { trackValidation, extractTokenId } = require('../services/tokenAnalyticsService');
 
 /**
  * POST /api/magic-auth/validate
@@ -29,6 +30,15 @@ router.post('/validate', magicTokenLimiter, async (req, res) => {
     const result = await validateToken(token, formLoadedAt);
 
     if (!result.valid) {
+      // Track failed validation (fire-and-forget)
+      trackValidation({
+        tokenId: extractTokenId(token),
+        success: false,
+        reason: result.reason,
+        ipAddress: req.ip,
+        userAgent: req.get('user-agent')
+      });
+
       // All failures get same generic message (security)
       // Rate limiter counts this as failure (non-2xx response)
       return res.status(400).json({
@@ -36,6 +46,15 @@ router.post('/validate', magicTokenLimiter, async (req, res) => {
         action: 'request_new'
       });
     }
+
+    // Track successful validation (fire-and-forget)
+    trackValidation({
+      tokenId: result.decoded.jti,
+      success: true,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+      graceUsed: result.graceUsed || false
+    });
 
     // Success response with info needed by frontend
     res.json({
@@ -49,6 +68,15 @@ router.post('/validate', magicTokenLimiter, async (req, res) => {
     });
 
   } catch (err) {
+    // Track server error (fire-and-forget)
+    trackValidation({
+      tokenId: extractTokenId(token),
+      success: false,
+      reason: 'server_error',
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent')
+    });
+
     console.error('Token validation error:', err);
     res.status(500).json({
       error: 'Validation failed',
