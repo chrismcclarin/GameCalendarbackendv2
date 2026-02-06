@@ -52,6 +52,7 @@ const googleAuthRoutes = require('./routes/googleAuth');
 const availabilityRoutes = require('./routes/availability');
 const webhooksRoutes = require('./routes/webhooks');
 const magicAuthRoutes = require('./routes/magicAuth');
+const groupPromptSettingsRoutes = require('./routes/groupPromptSettings');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -222,6 +223,7 @@ app.use('/api/magic-auth', magicAuthRoutes); // Magic link validation (no Auth0 
 // GET requests will use the general apiLimiter
 app.use('/api/users', verifyAuth0Token, userRoutes);
 app.use('/api/groups', writeOperationLimiter, verifyAuth0Token, groupRoutes);
+app.use('/api/groups', writeOperationLimiter, verifyAuth0Token, groupPromptSettingsRoutes);
 app.use('/api/events', writeOperationLimiter, verifyAuth0Token, eventRoutes);
 app.use('/api/lists', verifyAuth0Token, listRoutes);
 app.use('/api/game-reviews', writeOperationLimiter, verifyAuth0Token, gameReviewRoutes);
