@@ -53,6 +53,7 @@ const availabilityRoutes = require('./routes/availability');
 const webhooksRoutes = require('./routes/webhooks');
 const magicAuthRoutes = require('./routes/magicAuth');
 const groupPromptSettingsRoutes = require('./routes/groupPromptSettings');
+const availabilityResponseRoutes = require('./routes/availabilityResponse');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -217,6 +218,7 @@ app.use('/api/games', gameRoutes); // Game search is public
 app.use('/api/feedback', feedbackLimiter, optionalAuth, feedbackRoutes); // Feedback with strict rate limiting
 app.use('/api/webhooks', webhooksRoutes); // External service webhooks (Resend, etc.)
 app.use('/api/magic-auth', magicAuthRoutes); // Magic link validation (no Auth0 required)
+app.use('/api/availability-responses', availabilityResponseRoutes); // Availability form submission (magic token auth)
 
 // Protected routes (require Auth0 token)
 // Apply write operation rate limiting only to POST/PUT/DELETE requests
