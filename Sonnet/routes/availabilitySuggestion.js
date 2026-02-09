@@ -1,0 +1,156 @@
+// routes/availabilitySuggestion.js
+// API routes for availability suggestions (heatmap data)
+
+const express = require('express');
+const router = express.Router();
+const { verifyAuth0Token } = require('../middleware/auth0');
+const heatmapService = require('../services/heatmapService');
+const { AvailabilityPrompt, AvailabilitySuggestion, User, UserGroup } = require('../models');
+
+// Helper function to get user's role in a group
+const getUserRoleInGroup = async (user_id, group_id) => {
+  const user = await User.findOne({ where: { user_id } });
+  if (!user) return null;
+
+  const userGroup = await UserGroup.findOne({
+    where: {
+      user_id: user.user_id, // Use user.user_id (Auth0 string) not user.id (UUID)
+      group_id: group_id
+    }
+  });
+
+  return userGroup ? userGroup.role : null;
+};
+
+// Helper function to check if user is owner or admin
+const isOwnerOrAdmin = async (user_id, group_id) => {
+  const role = await getUserRoleInGroup(user_id, group_id);
+  return role === 'owner' || role === 'admin';
+};
+
+// Helper function to check if user is a group member
+const isGroupMember = async (user_id, group_id) => {
+  const role = await getUserRoleInGroup(user_id, group_id);
+  return role !== null;
+};
+
+/**
+ * GET /api/prompts/:promptId/suggestions
+ * Fetch suggestions for a prompt with optional filtering
+ *
+ * Query params:
+ * - min_participants (optional): Filter by participant_count >= value
+ * - meets_minimum (optional): Filter by meets_minimum = true/false
+ *
+ * Protected: User must be a member of the prompt's group
+ */
+router.get('/prompts/:promptId/suggestions', verifyAuth0Token, async (req, res) => {
+  try {
+    const { promptId } = req.params;
+    const user_id = req.user?.user_id;
+
+    if (!user_id) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // Fetch the prompt to get group_id
+    const prompt = await AvailabilityPrompt.findByPk(promptId);
+    if (!prompt) {
+      return res.status(404).json({ error: 'Prompt not found' });
+    }
+
+    // Verify user is a member of the prompt's group
+    const isMember = await isGroupMember(user_id, prompt.group_id);
+    if (!isMember) {
+      return res.status(403).json({ error: 'You must be a group member to view suggestions' });
+    }
+
+    // Parse query parameters
+    const options = {};
+
+    // Parse min_participants filter
+    if (req.query.min_participants !== undefined) {
+      const minParticipants = parseInt(req.query.min_participants, 10);
+      if (!isNaN(minParticipants) && minParticipants >= 0) {
+        options.minParticipants = minParticipants;
+      }
+    }
+
+    // Parse meets_minimum filter
+    if (req.query.meets_minimum !== undefined) {
+      options.meetsMinimum = req.query.meets_minimum === 'true';
+    }
+
+    // Fetch suggestions
+    const suggestions = await heatmapService.getSuggestions(promptId, options);
+
+    res.json({
+      prompt_id: promptId,
+      suggestion_count: suggestions.length,
+      suggestions: suggestions.map(s => ({
+        id: s.id,
+        suggested_start: s.suggested_start,
+        suggested_end: s.suggested_end,
+        participant_count: s.participant_count,
+        participant_user_ids: s.participant_user_ids,
+        preferred_count: s.preferred_count,
+        meets_minimum: s.meets_minimum,
+        score: s.score,
+        converted_to_event_id: s.converted_to_event_id
+      }))
+    });
+  } catch (error) {
+    console.error('Error fetching suggestions:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/prompts/:promptId/suggestions/refresh
+ * Trigger re-aggregation of responses into suggestions
+ *
+ * Protected: User must be admin or owner of the prompt's group
+ */
+router.post('/prompts/:promptId/suggestions/refresh', verifyAuth0Token, async (req, res) => {
+  try {
+    const { promptId } = req.params;
+    const user_id = req.user?.user_id;
+
+    if (!user_id) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // Fetch the prompt to get group_id
+    const prompt = await AvailabilityPrompt.findByPk(promptId);
+    if (!prompt) {
+      return res.status(404).json({ error: 'Prompt not found' });
+    }
+
+    // Verify user is admin or owner of the prompt's group
+    const hasPermission = await isOwnerOrAdmin(user_id, prompt.group_id);
+    if (!hasPermission) {
+      return res.status(403).json({ error: 'Only admins and owners can refresh suggestions' });
+    }
+
+    // Trigger aggregation
+    const result = await heatmapService.aggregateResponses(promptId);
+
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        message: result.message
+      });
+    }
+
+    res.json({
+      success: true,
+      suggestion_count: result.suggestionCount,
+      message: result.message
+    });
+  } catch (error) {
+    console.error('Error refreshing suggestions:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+module.exports = router;

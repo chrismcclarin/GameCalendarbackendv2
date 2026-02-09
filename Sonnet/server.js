@@ -54,6 +54,7 @@ const webhooksRoutes = require('./routes/webhooks');
 const magicAuthRoutes = require('./routes/magicAuth');
 const groupPromptSettingsRoutes = require('./routes/groupPromptSettings');
 const availabilityResponseRoutes = require('./routes/availabilityResponse');
+const availabilitySuggestionRoutes = require('./routes/availabilitySuggestion');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -243,6 +244,8 @@ const conditionalAuth = (req, res, next) => {
 };
 app.use('/api/auth', authLimiter, conditionalAuth, googleAuthRoutes);
 app.use('/api/availability', writeOperationLimiter, verifyAuth0Token, availabilityRoutes);
+// Availability suggestion routes (protected by Auth0 in the route handlers)
+app.use('/api', writeOperationLimiter, availabilitySuggestionRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
