@@ -68,6 +68,12 @@ const AvailabilityPrompt = sequelize.define('AvailabilityPrompt', {
     allowNull: true,
     // Optional custom message included in the prompt email
   },
+  blind_voting_enabled: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    // When true, heatmap hidden until user submits or deadline passes
+  },
 }, {
   timestamps: true,
   indexes: [
