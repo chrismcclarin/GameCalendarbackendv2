@@ -53,6 +53,11 @@ const AvailabilityResponse = sequelize.define('AvailabilityResponse', {
     // Audit field: which token was used to submit (if any)
     // Null if submitted via authenticated session
   },
+  last_reminded_at: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    // Timestamp of last reminder email sent to this user for this prompt
+  },
 }, {
   timestamps: true,
   indexes: [
