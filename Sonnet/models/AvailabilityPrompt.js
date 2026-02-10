@@ -74,6 +74,12 @@ const AvailabilityPrompt = sequelize.define('AvailabilityPrompt', {
     defaultValue: false,
     // When true, heatmap hidden until user submits or deadline passes
   },
+  auto_schedule_enabled: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    // When true, auto-creates event from best suggestion when deadline passes
+  },
 }, {
   timestamps: true,
   indexes: [

@@ -77,6 +77,13 @@ const AvailabilitySuggestion = sequelize.define('AvailabilitySuggestion', {
     // When this suggestion becomes an event, track which one
     // Null until/unless suggestion is converted
   },
+  tentative_calendar_event_ids: {
+    type: DataTypes.JSONB,
+    allowNull: true,
+    defaultValue: null,
+    // Maps user_id to Google Calendar event ID for tentative holds
+    // Format: {"user_id_1": "calendar_event_id_1", ...}
+  },
 }, {
   timestamps: true,
   indexes: [
