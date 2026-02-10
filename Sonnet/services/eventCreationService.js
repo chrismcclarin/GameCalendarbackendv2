@@ -12,6 +12,7 @@ const {
   sequelize
 } = require('../models');
 const emailService = require('./emailService');
+const tentativeHoldService = require('./tentativeHoldService');
 
 /**
  * Calculate duration in minutes between two dates
@@ -198,7 +199,12 @@ async function convertSuggestionToEvent(suggestionId, creatorUserId, options = {
 
     console.log(`Successfully converted suggestion ${suggestionId} to event ${event.id}`);
 
-    // 9. Post-commit: Send confirmation emails (fire-and-forget)
+    // 9. Post-commit cleanup: Remove tentative calendar holds (fire-and-forget)
+    // Clean up all tentative holds for this prompt since the event is now confirmed
+    tentativeHoldService.cleanupHoldsOnEventCreation(suggestionId, prompt.id)
+      .catch(error => console.error('Tentative hold cleanup error:', error.message));
+
+    // 10. Post-commit: Send confirmation emails (fire-and-forget)
     if (options.sendEmails !== false && users.length > 0) {
       sendConfirmationEmails(event, users, group, game).catch(err => {
         console.error('Error sending event confirmation emails:', err);
