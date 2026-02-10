@@ -5,6 +5,7 @@ const express = require('express');
 const router = express.Router();
 const { verifyAuth0Token } = require('../middleware/auth0');
 const heatmapService = require('../services/heatmapService');
+const eventCreationService = require('../services/eventCreationService');
 const { AvailabilityPrompt, AvailabilitySuggestion, User, UserGroup } = require('../models');
 
 // Helper function to get user's role in a group
@@ -149,6 +150,104 @@ router.post('/prompts/:promptId/suggestions/refresh', verifyAuth0Token, async (r
     });
   } catch (error) {
     console.error('Error refreshing suggestions:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/suggestions/:suggestionId/convert
+ * Convert an availability suggestion to a confirmed event
+ *
+ * Creates the event, adds all available participants, and sends confirmation emails.
+ * The suggestion is marked as converted and cannot be converted again.
+ *
+ * Protected: User must be admin or owner of the suggestion's group
+ *
+ * Response:
+ * - 201: Event created successfully
+ * - 400: Suggestion already converted (includes existing event_id)
+ * - 401: Unauthorized (no token)
+ * - 403: Only admins and owners can create events
+ * - 404: Suggestion not found
+ * - 500: Server error
+ */
+router.post('/suggestions/:suggestionId/convert', verifyAuth0Token, async (req, res) => {
+  try {
+    const { suggestionId } = req.params;
+    const user_id = req.user?.user_id;
+
+    if (!user_id) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // Fetch the suggestion with its prompt to get group_id
+    const suggestion = await AvailabilitySuggestion.findByPk(suggestionId, {
+      include: [{
+        model: AvailabilityPrompt,
+        attributes: ['id', 'group_id']
+      }]
+    });
+
+    if (!suggestion) {
+      return res.status(404).json({ error: 'Suggestion not found' });
+    }
+
+    const prompt = suggestion.AvailabilityPrompt;
+    if (!prompt) {
+      return res.status(404).json({ error: 'Associated prompt not found' });
+    }
+
+    // Verify user is admin or owner of the group
+    const hasPermission = await isOwnerOrAdmin(user_id, prompt.group_id);
+    if (!hasPermission) {
+      return res.status(403).json({
+        error: 'Only admins and owners can convert suggestions to events'
+      });
+    }
+
+    // Check if already converted (fast path before calling service)
+    if (suggestion.converted_to_event_id) {
+      return res.status(400).json({
+        error: 'Suggestion already converted to event',
+        event_id: suggestion.converted_to_event_id,
+        already_converted: true
+      });
+    }
+
+    // Convert the suggestion to an event
+    const result = await eventCreationService.convertSuggestionToEvent(
+      suggestionId,
+      user_id,
+      {
+        comments: req.body.comments,  // Optional override
+        sendEmails: req.body.send_emails !== false  // Default true
+      }
+    );
+
+    if (!result.success) {
+      // Handle case where conversion failed (e.g., race condition)
+      if (result.event_id) {
+        return res.status(400).json({
+          error: result.message,
+          event_id: result.event_id,
+          already_converted: true
+        });
+      }
+      return res.status(400).json({
+        error: result.message
+      });
+    }
+
+    // Success - return 201 Created
+    res.status(201).json({
+      success: true,
+      event_id: result.event_id,
+      message: result.message,
+      event: result.event
+    });
+
+  } catch (error) {
+    console.error('Error converting suggestion to event:', error);
     res.status(500).json({ error: error.message });
   }
 });
