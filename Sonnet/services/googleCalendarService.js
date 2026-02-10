@@ -519,6 +519,182 @@ class GoogleCalendarService {
       throw new Error(`Failed to get busy times: ${error.message}`);
     }
   }
+
+  /**
+   * Create a tentative calendar hold for a user
+   * Tentative events show as "tentative" on the calendar and don't send notifications
+   * @param {Object} eventData - Event data (groupName, gameName, startDateTime, endDateTime, timezone)
+   * @param {string} accessToken - User's Google OAuth access token
+   * @param {string} refreshToken - User's Google OAuth refresh token (optional, for auto-refresh)
+   * @returns {Promise<Object>} Created calendar event with id
+   */
+  async createTentativeHold(eventData, accessToken, refreshToken = null) {
+    try {
+      if (!accessToken) {
+        throw new Error('Google Calendar access token is required');
+      }
+
+      const oauth2Client = new google.auth.OAuth2(
+        process.env.GOOGLE_CLIENT_ID,
+        process.env.GOOGLE_CLIENT_SECRET,
+        getGoogleRedirectUri()
+      );
+
+      oauth2Client.setCredentials({
+        access_token: accessToken,
+        refresh_token: refreshToken,
+      });
+
+      const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+
+      const calendarEvent = {
+        summary: `${eventData.groupName} - ${eventData.gameName || 'Game Night'} (tentative)`,
+        description: 'Tentative hold - pending group confirmation. Will be updated or removed when final decision is made.',
+        start: {
+          dateTime: eventData.startDateTime,
+          timeZone: eventData.timezone || 'UTC',
+        },
+        end: {
+          dateTime: eventData.endDateTime,
+          timeZone: eventData.timezone || 'UTC',
+        },
+        status: 'tentative',         // Key: shows as tentative on calendar
+        transparency: 'opaque',      // Still blocks time (shows as busy)
+        colorId: '8',                // Graphite color to distinguish from confirmed
+        reminders: {
+          useDefault: false,
+          overrides: []              // No reminders for tentative holds
+        }
+      };
+
+      const response = await calendar.events.insert({
+        calendarId: 'primary',
+        resource: calendarEvent,
+        sendUpdates: 'none'          // Don't notify for tentative holds
+      });
+
+      return response.data;
+    } catch (error) {
+      // If token expired and we have a refresh token, try to refresh and retry
+      if (error.code === 401 && refreshToken) {
+        try {
+          console.log('Tentative hold: Access token expired, attempting to refresh...');
+          const newAccessToken = await this.refreshAccessToken(refreshToken);
+
+          // Retry with new token (recursive call without refresh to avoid infinite loop)
+          const retryResult = await this.createTentativeHold(eventData, newAccessToken, null);
+
+          // Include new token so caller can update it
+          return {
+            ...retryResult,
+            _new_access_token: newAccessToken
+          };
+        } catch (refreshError) {
+          console.error('Error refreshing token for tentative hold:', refreshError.message);
+          throw new Error(`Failed to create tentative hold after token refresh: ${refreshError.message}`);
+        }
+      }
+
+      console.error('Error creating tentative calendar hold:', error.message);
+      throw new Error(`Failed to create tentative hold: ${error.message}`);
+    }
+  }
+
+  /**
+   * Delete a single tentative calendar hold
+   * @param {string} calendarEventId - Google Calendar event ID to delete
+   * @param {string} accessToken - User's Google OAuth access token
+   * @param {string} refreshToken - User's Google OAuth refresh token (optional, for auto-refresh)
+   * @returns {Promise<boolean>} True if deleted successfully
+   */
+  async deleteTentativeHold(calendarEventId, accessToken, refreshToken = null) {
+    try {
+      if (!accessToken) {
+        throw new Error('Google Calendar access token is required');
+      }
+
+      if (!calendarEventId) {
+        console.warn('No calendar event ID provided for deletion');
+        return false;
+      }
+
+      const oauth2Client = new google.auth.OAuth2(
+        process.env.GOOGLE_CLIENT_ID,
+        process.env.GOOGLE_CLIENT_SECRET,
+        getGoogleRedirectUri()
+      );
+
+      oauth2Client.setCredentials({
+        access_token: accessToken,
+        refresh_token: refreshToken,
+      });
+
+      const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+
+      await calendar.events.delete({
+        calendarId: 'primary',
+        eventId: calendarEventId,
+        sendUpdates: 'none'          // Silent deletion
+      });
+
+      return true;
+    } catch (error) {
+      // If token expired and we have a refresh token, try to refresh and retry
+      if (error.code === 401 && refreshToken) {
+        try {
+          console.log('Delete tentative hold: Access token expired, attempting to refresh...');
+          const newAccessToken = await this.refreshAccessToken(refreshToken);
+
+          // Retry with new token (without refresh to avoid infinite loop)
+          return await this.deleteTentativeHold(calendarEventId, newAccessToken, null);
+        } catch (refreshError) {
+          console.error('Error refreshing token for tentative hold deletion:', refreshError.message);
+          // Don't throw - deletion failures shouldn't break the flow
+        }
+      }
+
+      // Event may already be deleted by user - log but don't throw
+      if (error.code === 404 || error.code === 410) {
+        console.log(`Tentative hold ${calendarEventId} already deleted or not found`);
+        return true;
+      }
+
+      console.error(`Error deleting tentative hold ${calendarEventId}:`, error.message);
+      return false;
+    }
+  }
+
+  /**
+   * Delete multiple tentative calendar holds
+   * Catches errors per-event so one failure doesn't stop others
+   * @param {Array<string>} calendarEventIds - Array of Google Calendar event IDs to delete
+   * @param {string} accessToken - User's Google OAuth access token
+   * @param {string} refreshToken - User's Google OAuth refresh token (optional, for auto-refresh)
+   * @returns {Promise<Object>} { deleted: number, failed: number }
+   */
+  async deleteTentativeHolds(calendarEventIds, accessToken, refreshToken = null) {
+    const result = { deleted: 0, failed: 0 };
+
+    if (!Array.isArray(calendarEventIds) || calendarEventIds.length === 0) {
+      return result;
+    }
+
+    for (const eventId of calendarEventIds) {
+      try {
+        const success = await this.deleteTentativeHold(eventId, accessToken, refreshToken);
+        if (success) {
+          result.deleted++;
+        } else {
+          result.failed++;
+        }
+      } catch (error) {
+        console.error(`Error deleting tentative hold ${eventId}:`, error.message);
+        result.failed++;
+      }
+    }
+
+    return result;
+  }
 }
 
 module.exports = new GoogleCalendarService();
