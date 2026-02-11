@@ -57,6 +57,9 @@ const availabilityResponseRoutes = require('./routes/availabilityResponse');
 const availabilitySuggestionRoutes = require('./routes/availabilitySuggestion');
 const availabilityPromptRoutes = require('./routes/availabilityPrompt');
 
+// Scheduler for deadline-based auto-scheduling
+const { deadlineJob } = require('./schedulers/deadlineScheduler');
+
 const app = express();
 const PORT = process.env.PORT || 4000;
 
@@ -344,6 +347,14 @@ const startServer = async () => {
     app.listen(PORT, () => {
       console.log(`Server is running on port ${PORT}`);
       console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+
+      // Start deadline scheduler (only in production or if explicitly enabled)
+      if (process.env.NODE_ENV === 'production' || process.env.ENABLE_SCHEDULER === 'true') {
+        deadlineJob.start();
+        console.log('Deadline scheduler started');
+      } else {
+        console.log('Deadline scheduler disabled (set ENABLE_SCHEDULER=true to enable)');
+      }
     });
   } catch (error) {
     console.error('Unable to start server:', error);
