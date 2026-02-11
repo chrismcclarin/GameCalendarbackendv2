@@ -232,6 +232,73 @@ class EmailService {
   }
 
   // ============================================
+  // No Consensus Email Template
+  // ============================================
+
+  /**
+   * Generate email template for no consensus notification
+   * Sent to admins when an availability poll closes without a viable time slot
+   * @param {Object} params - Template parameters
+   * @param {string} params.groupName - Name of the group
+   * @param {string} params.promptId - ID of the availability prompt
+   * @param {string} params.dashboardUrl - URL to the prompt dashboard
+   * @returns {{html: string, text: string}} Email content
+   */
+  generateNoConsensusEmailTemplate({ groupName, promptId, dashboardUrl }) {
+    const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background-color: #F59E0B; color: white; padding: 20px; text-align: center; border-radius: 5px 5px 0 0; }
+    .content { background-color: #f9fafb; padding: 30px; border-radius: 0 0 5px 5px; }
+    .button { display: inline-block; padding: 12px 24px; background-color: #F59E0B; color: white; text-decoration: none; border-radius: 5px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>No Consensus Reached</h1>
+    </div>
+    <div class="content">
+      <p>The availability poll for <strong>${groupName}</strong> has closed, but no time slot met the minimum participant threshold.</p>
+
+      <p>You may want to:</p>
+      <ul>
+        <li>Review the available time slots and manually create an event</li>
+        <li>Send a new availability poll with adjusted settings</li>
+        <li>Reach out to group members who haven't responded</li>
+      </ul>
+
+      <div style="text-align: center; margin: 30px 0;">
+        <a href="${dashboardUrl}" class="button">Review Suggestions</a>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+    `.trim();
+
+    const text = `
+No Consensus Reached
+
+The availability poll for "${groupName}" has closed, but no time slot met the minimum participant threshold.
+
+You may want to:
+- Review the available time slots and manually create an event
+- Send a new availability poll with adjusted settings
+- Reach out to group members who haven't responded
+
+Review suggestions: ${dashboardUrl}
+    `.trim();
+
+    return { html, text };
+  }
+
+  // ============================================
   // Legacy methods (to be updated in Phase 7)
   // These maintain API compatibility with existing code
   // ============================================
