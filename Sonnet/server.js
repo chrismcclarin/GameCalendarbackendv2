@@ -351,9 +351,17 @@ const startServer = async () => {
       // Start deadline scheduler (only in production or if explicitly enabled)
       if (process.env.NODE_ENV === 'production' || process.env.ENABLE_SCHEDULER === 'true') {
         deadlineJob.start();
-        console.log('Deadline scheduler started');
+        console.log('Deadline scheduler started (node-cron)');
       } else {
         console.log('Deadline scheduler disabled (set ENABLE_SCHEDULER=true to enable)');
+      }
+
+      // Start BullMQ workers (only in production or if explicitly enabled)
+      if (process.env.NODE_ENV === 'production' || process.env.ENABLE_WORKERS === 'true') {
+        const { promptWorker, deadlineWorker, reminderWorker } = require('./workers');
+        console.log('BullMQ workers started (prompts, deadlines, reminders)');
+      } else {
+        console.log('BullMQ workers disabled (set ENABLE_WORKERS=true to enable)');
       }
     });
   } catch (error) {
