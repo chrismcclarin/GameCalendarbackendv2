@@ -17,10 +17,13 @@
         "email:dev": "npx react-email dev --dir emails --port 3001"
     },
     "dependencies": {
+        "@bull-board/api": "^6.18.0",
+        "@bull-board/express": "^6.18.0",
         "@react-email/components": "^1.0.6",
         "@sendgrid/mail": "^8.1.6",
         "@sentry/node": "^8.0.0",
         "axios": "^1.10.0",
+        "bullmq": "^5.69.1",
         "cors": "^2.8.5",
         "csv-parser": "^3.2.0",
         "dotenv": "^16.3.1",
