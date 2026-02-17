@@ -360,6 +360,8 @@ const startServer = async () => {
       if (process.env.NODE_ENV === 'production' || process.env.ENABLE_WORKERS === 'true') {
         const { promptWorker, deadlineWorker, reminderWorker } = require('./workers');
         console.log('BullMQ workers started (prompts, deadlines, reminders)');
+        const { syncPromptSchedulesToQueue } = require('./schedulers/promptScheduler');
+        syncPromptSchedulesToQueue().catch(err => console.error('Failed to sync prompt schedules:', err.message));
       } else {
         console.log('BullMQ workers disabled (set ENABLE_WORKERS=true to enable)');
       }
