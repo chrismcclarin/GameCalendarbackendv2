@@ -13,6 +13,7 @@ const {
   Game
 } = require('../models');
 const emailService = require('../services/emailService');
+const { scheduleReminders, scheduleDeadlineJob } = require('../services/reminderService');
 
 /**
  * GET /api/prompts/:promptId/respondents
@@ -252,6 +253,89 @@ router.post('/prompts/:promptId/remind/:userId', verifyAuth0Token, async (req, r
   } catch (error) {
     console.error('Error sending reminder:', error);
     res.status(500).json({ error: 'Failed to send reminder' });
+  }
+});
+
+
+/**
+ * POST /api/prompts
+ * Manually create an availability prompt for a group
+ *
+ * Protected by Auth0 token (admin/owner only)
+ * Body: { group_id, deadline, auto_schedule_enabled, blind_voting_enabled, week_identifier }
+ *
+ * Schedules reminder and deadline jobs after creation when ENABLE_WORKERS is enabled.
+ */
+router.post('/prompts', verifyAuth0Token, async (req, res) => {
+  try {
+    const requestingUserId = req.user.sub;
+    const {
+      group_id,
+      deadline,
+      auto_schedule_enabled,
+      blind_voting_enabled,
+      week_identifier
+    } = req.body;
+
+    if (!group_id) {
+      return res.status(400).json({ error: 'group_id is required' });
+    }
+
+    if (!deadline) {
+      return res.status(400).json({ error: 'deadline is required' });
+    }
+
+    // Verify group exists
+    const group = await Group.findByPk(group_id);
+    if (!group) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+
+    // Verify requester is admin/owner
+    const userGroup = await UserGroup.findOne({
+      where: { group_id, user_id: requestingUserId }
+    });
+
+    if (!userGroup || !['owner', 'admin'].includes(userGroup.role)) {
+      return res.status(403).json({ error: 'Only admins can create availability prompts' });
+    }
+
+    // Create the prompt
+    const prompt = await AvailabilityPrompt.create({
+      group_id,
+      prompt_date: new Date(),
+      deadline: new Date(deadline),
+      status: 'pending',
+      week_identifier: week_identifier || null,
+      auto_schedule_enabled: auto_schedule_enabled ?? true,
+      blind_voting_enabled: blind_voting_enabled ?? false
+    });
+
+    // Schedule reminder and deadline jobs (only if BullMQ is enabled)
+    if (process.env.NODE_ENV === 'production' || process.env.ENABLE_WORKERS === 'true') {
+      try {
+        await scheduleDeadlineJob(prompt);
+        await scheduleReminders(prompt);
+      } catch (err) {
+        console.error('Failed to schedule jobs for prompt:', err.message);
+        // Don't fail the request - jobs can be scheduled manually or by cron
+      }
+    }
+
+    res.status(201).json({
+      message: 'Prompt created successfully',
+      prompt: {
+        id: prompt.id,
+        group_id: prompt.group_id,
+        deadline: prompt.deadline,
+        status: prompt.status,
+        week_identifier: prompt.week_identifier
+      }
+    });
+
+  } catch (error) {
+    console.error('Error creating prompt:', error);
+    res.status(500).json({ error: 'Failed to create prompt' });
   }
 });
 
