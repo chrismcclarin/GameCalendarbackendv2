@@ -363,6 +363,16 @@ const startServer = async () => {
       } else {
         console.log('BullMQ workers disabled (set ENABLE_WORKERS=true to enable)');
       }
+
+      // Mount Bull Board dashboard (only if workers are enabled)
+      if (process.env.NODE_ENV === 'production' || process.env.ENABLE_WORKERS === 'true') {
+        try {
+          const mountBullBoard = require('./routes/bullBoard');
+          mountBullBoard(app);
+        } catch (err) {
+          console.warn('Bull Board mount failed (Redis may not be available):', err.message);
+        }
+      }
     });
   } catch (error) {
     console.error('Unable to start server:', error);
