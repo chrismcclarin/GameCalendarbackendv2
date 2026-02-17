@@ -58,6 +58,13 @@ const AvailabilityResponse = sequelize.define('AvailabilityResponse', {
     allowNull: true,
     // Timestamp of last reminder email sent to this user for this prompt
   },
+  reminder_count: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    defaultValue: 0,
+    // Number of reminder emails sent to this user for this prompt
+    // Max 2 per AUTO-03 requirement
+  },
 }, {
   timestamps: true,
   indexes: [
