@@ -1,6 +1,7 @@
 // services/reminderService.js
 // Schedules reminder and deadline jobs for availability prompts
-const { reminderQueue, deadlineQueue } = require('../queues');
+// Note: queues are required lazily inside each function to avoid opening Redis
+// connections at module load time when ENABLE_WORKERS is not set.
 
 /**
  * Schedule reminder jobs for a prompt at 50% and 90% of deadline window
@@ -8,6 +9,7 @@ const { reminderQueue, deadlineQueue } = require('../queues');
  * @param {Object} prompt - AvailabilityPrompt instance
  */
 async function scheduleReminders(prompt) {
+  const { reminderQueue } = require('../queues');
   const now = Date.now();
   const deadlineMs = new Date(prompt.deadline).getTime();
   const timeWindow = deadlineMs - now;
@@ -64,6 +66,7 @@ async function scheduleReminders(prompt) {
  * @param {Object} prompt - AvailabilityPrompt instance
  */
 async function scheduleDeadlineJob(prompt) {
+  const { deadlineQueue } = require('../queues');
   const now = Date.now();
   const deadlineMs = new Date(prompt.deadline).getTime();
   const delay = deadlineMs - now;
@@ -91,6 +94,7 @@ async function scheduleDeadlineJob(prompt) {
  * @param {string} promptId - Prompt ID
  */
 async function cancelPromptJobs(promptId) {
+  const { reminderQueue, deadlineQueue } = require('../queues');
   const jobIds = [
     `reminder-50-${promptId}`,
     `reminder-90-${promptId}`,
