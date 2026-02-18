@@ -3,6 +3,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const router = express.Router();
+const { EmailMetrics } = require('../models');
 
 /**
  * Verify SendGrid webhook signature using ECDSA
@@ -45,7 +46,7 @@ function verifySendGridSignature(publicKey, payload, signature, timestamp) {
  *
  * POST /api/webhooks/sendgrid
  */
-router.post('/sendgrid', express.json(), (req, res) => {
+router.post('/sendgrid', express.json(), async (req, res) => {
   const publicKey = process.env.SENDGRID_WEBHOOK_VERIFICATION_KEY;
   const signature = req.headers['x-twilio-email-event-webhook-signature'];
   const timestamp = req.headers['x-twilio-email-event-webhook-timestamp'];
@@ -69,7 +70,7 @@ router.post('/sendgrid', express.json(), (req, res) => {
   // SendGrid sends an array of events
   const events = Array.isArray(req.body) ? req.body : [req.body];
 
-  events.forEach((event) => {
+  for (const event of events) {
     const { event: eventType, email, sg_message_id, reason } = event;
 
     // Log event based on type
@@ -81,11 +82,30 @@ router.post('/sendgrid', express.json(), (req, res) => {
 
       case 'delivered':
         console.log(`[SendGrid] Email delivered - ID: ${sg_message_id}, To: ${maskEmail(email)}`);
+        try {
+          await EmailMetrics.create({
+            sg_message_id: sg_message_id || 'unknown',
+            event_type: 'delivered',
+            email_hash: email ? crypto.createHash('sha256').update(email).digest('hex') : null,
+            prompt_id: event.prompt_id || null,
+            occurred_at: new Date(event.timestamp * 1000 || Date.now()),
+            sg_machine_open: false
+          });
+        } catch (e) { console.error('[Webhooks] Failed to persist delivered event:', e.message); }
         break;
 
       case 'bounce':
         console.error(`[SendGrid] Email bounced - ID: ${sg_message_id}, To: ${maskEmail(email)}, Reason: ${reason || 'Unknown'}`);
-        // TODO: In future phases, mark email address as invalid in database
+        try {
+          await EmailMetrics.create({
+            sg_message_id: sg_message_id || 'unknown',
+            event_type: 'bounce',
+            email_hash: email ? crypto.createHash('sha256').update(email).digest('hex') : null,
+            prompt_id: event.prompt_id || null,
+            occurred_at: new Date(event.timestamp * 1000 || Date.now()),
+            sg_machine_open: false
+          });
+        } catch (e) { console.error('[Webhooks] Failed to persist bounce event:', e.message); }
         break;
 
       case 'dropped':
@@ -98,7 +118,16 @@ router.post('/sendgrid', express.json(), (req, res) => {
 
       case 'spamreport':
         console.warn(`[SendGrid] Spam report received - ID: ${sg_message_id}, To: ${maskEmail(email)}`);
-        // TODO: In future phases, unsubscribe user from email notifications
+        try {
+          await EmailMetrics.create({
+            sg_message_id: sg_message_id || 'unknown',
+            event_type: 'spamreport',
+            email_hash: email ? crypto.createHash('sha256').update(email).digest('hex') : null,
+            prompt_id: event.prompt_id || null,
+            occurred_at: new Date(event.timestamp * 1000 || Date.now()),
+            sg_machine_open: false
+          });
+        } catch (e) { console.error('[Webhooks] Failed to persist spamreport event:', e.message); }
         break;
 
       case 'unsubscribe':
@@ -107,7 +136,22 @@ router.post('/sendgrid', express.json(), (req, res) => {
         break;
 
       case 'open':
-        console.log(`[SendGrid] Email opened - ID: ${sg_message_id}, To: ${maskEmail(email)}`);
+        // CRITICAL: Exclude machine/bot opens — Apple MPP and security gateways auto-open every email
+        if (!event.sg_machine_open) {
+          console.log(`[SendGrid] Email opened (human) - ID: ${sg_message_id}, To: ${maskEmail(email)}`);
+          try {
+            await EmailMetrics.create({
+              sg_message_id: sg_message_id || 'unknown',
+              event_type: 'open',
+              email_hash: email ? crypto.createHash('sha256').update(email).digest('hex') : null,
+              prompt_id: event.prompt_id || null,
+              occurred_at: new Date(event.timestamp * 1000 || Date.now()),
+              sg_machine_open: false
+            });
+          } catch (e) { console.error('[Webhooks] Failed to persist open event:', e.message); }
+        } else {
+          console.log(`[SendGrid] Machine open filtered - ID: ${sg_message_id}`);
+        }
         break;
 
       case 'click':
@@ -117,7 +161,7 @@ router.post('/sendgrid', express.json(), (req, res) => {
       default:
         console.log(`[SendGrid] Event: ${eventType} - ID: ${sg_message_id}`);
     }
-  });
+  }
 
   // Always return 200 to acknowledge receipt (prevents SendGrid retries)
   res.status(200).json({ received: true, count: events.length });

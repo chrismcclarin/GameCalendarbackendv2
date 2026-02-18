@@ -38,9 +38,11 @@ class EmailService {
    * @param {string} [options.text] - Plain text content
    * @param {string} [options.replyTo] - Reply-to address (typically group owner)
    * @param {string} [options.groupName] - Group name for from field
+   * @param {string} [options.promptId] - Availability prompt ID for webhook attribution via customArgs
+   * @param {string} [options.emailType] - Email type label (e.g. 'availability_prompt', 'reminder')
    * @returns {Promise<{success: boolean, id?: string, error?: string}>}
    */
-  async send({ to, subject, html, text, replyTo, groupName }) {
+  async send({ to, subject, html, text, replyTo, groupName, promptId, emailType }) {
     if (!this.isConfigured()) {
       console.warn('Email service not configured. Skipping email.');
       return { success: false, error: 'Email service not configured' };
@@ -62,6 +64,9 @@ class EmailService {
         ...(html && { html }),
         ...(text && { text }),
         ...(replyTo && { replyTo }),
+        // customArgs enables webhook event attribution back to the originating prompt
+        // SendGrid passes these through on open/delivered/bounce/spamreport events
+        ...(promptId && { customArgs: { prompt_id: String(promptId), email_type: emailType || 'notification' } })
       };
 
       const response = await sgMail.send(msg);

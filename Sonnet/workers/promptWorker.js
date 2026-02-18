@@ -94,7 +94,9 @@ const promptWorker = new Worker('prompts', async (job) => {
                <p><a href="${availabilityUrl}">Click here to submit your availability</a></p>
                <p>This link expires in 72 hours.</p>`,
         text: `Hi ${user.username || 'there'},\n\n${group.name} is looking to schedule a game session.\n\nSubmit your availability: ${availabilityUrl}\n\nThis link expires in 72 hours.`,
-        groupName: group.name
+        groupName: group.name,
+        promptId: prompt.id,
+        emailType: 'availability_prompt'
       });
       emailsSent++;
     } catch (err) {

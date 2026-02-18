@@ -94,7 +94,9 @@ const reminderWorker = new Worker('reminders', async (job) => {
                <p><a href="${availabilityUrl}">Click here to submit your availability</a></p>
                <p>The deadline is approaching!</p>`,
         text: `Hi ${user.username || 'there'},\n\nThis is a ${reminderLabel} reminder to submit your availability for ${group.name}.\n\nSubmit your availability: ${availabilityUrl}\n\nThe deadline is approaching!`,
-        groupName: group.name
+        groupName: group.name,
+        promptId: promptId,
+        emailType: 'reminder'
       });
 
       // Track reminder (upsert to create or update placeholder record)
