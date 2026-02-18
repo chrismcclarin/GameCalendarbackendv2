@@ -6,6 +6,16 @@ const { AvailabilityPrompt, Group, GroupPromptSettings, UserGroup, User } = requ
 const magicTokenService = require('../services/magicTokenService');
 const emailService = require('../services/emailService');
 
+// Optional Sentry integration
+let Sentry = null;
+if (process.env.SENTRY_DSN) {
+  try {
+    Sentry = require('@sentry/node');
+  } catch (err) {
+    console.warn('[PromptWorker] Sentry not available:', err.message);
+  }
+}
+
 const connection = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
   maxRetriesPerRequest: null,
   enableReadyCheck: false
@@ -99,6 +109,11 @@ const promptWorker = new Worker('prompts', async (job) => {
         emailType: 'availability_prompt'
       });
       emailsSent++;
+      if (Sentry) {
+        Sentry.metrics.count('availability_email.sent', 1, {
+          attributes: { group_id: String(groupId), email_type: 'availability_prompt' }
+        });
+      }
     } catch (err) {
       console.error(`[PromptWorker] Failed to send email to ${user.email}:`, err.message);
     }
@@ -106,6 +121,11 @@ const promptWorker = new Worker('prompts', async (job) => {
 
   // Update prompt status to active
   await prompt.update({ status: 'active' });
+  if (Sentry) {
+    Sentry.metrics.count('availability_prompt.created', 1, {
+      attributes: { group_id: String(groupId) }
+    });
+  }
 
   console.log(`[PromptWorker] Created prompt ${prompt.id}, sent ${emailsSent} emails`);
   return { promptId: prompt.id, recipientCount: emailsSent };

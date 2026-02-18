@@ -25,6 +25,7 @@ const deadlineWorker = new Worker('deadlines', async (job) => {
 
   // Wrap in Sentry monitor if available
   const processJob = async () => {
+    const jobStart = Date.now();
     const { AvailabilityPrompt } = require('../models');
     const prompt = await AvailabilityPrompt.findByPk(promptId);
 
@@ -39,6 +40,14 @@ const deadlineWorker = new Worker('deadlines', async (job) => {
     }
 
     await processExpiredPrompt(prompt);
+
+    // Track job processing duration
+    if (Sentry) {
+      Sentry.metrics.distribution('deadline_job.duration_ms', Date.now() - jobStart, {
+        unit: 'millisecond'
+      });
+    }
+
     return { promptId, status: 'processed' };
   };
 

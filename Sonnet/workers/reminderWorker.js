@@ -7,6 +7,16 @@ const { Op } = require('sequelize');
 const emailService = require('../services/emailService');
 const magicTokenService = require('../services/magicTokenService');
 
+// Optional Sentry integration
+let Sentry = null;
+if (process.env.SENTRY_DSN) {
+  try {
+    Sentry = require('@sentry/node');
+  } catch (err) {
+    console.warn('[ReminderWorker] Sentry not available:', err.message);
+  }
+}
+
 const connection = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
   maxRetriesPerRequest: null,
   enableReadyCheck: false
@@ -118,6 +128,11 @@ const reminderWorker = new Worker('reminders', async (job) => {
       }
 
       remindersSent++;
+      if (Sentry) {
+        Sentry.metrics.count('reminder_email.sent', 1, {
+          attributes: { reminder_type: reminderType }
+        });
+      }
     } catch (err) {
       console.error(`[ReminderWorker] Failed to send reminder to ${user.email}:`, err.message);
     }
