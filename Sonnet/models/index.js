@@ -1,4 +1,7 @@
 // models/index.js
+// LOAD TESTING NOTE: Increase pool.max to 20 when running Artillery load tests
+// Set SEQUELIZE_POOL_MAX=20 or manually update pool.max before running:
+// npm run load:generate-tokens && SEQUELIZE_POOL_MAX=20 LOAD_TEST_TARGET=http://localhost:4000 npx artillery run tests/load/availability-pipeline.yml
 const User = require('./User');
 const Group = require('./Group');
 const Game = require('./Game');

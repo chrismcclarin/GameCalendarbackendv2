@@ -2,6 +2,12 @@
 const { Sequelize } = require('sequelize');
 require('dotenv').config();
 
+// LOAD TESTING NOTE: Increase pool.max to 20 when running Artillery load tests
+// Default max:5 causes p99 spikes at 50 concurrent requests (45 requests wait for connection)
+// Override via: SEQUELIZE_POOL_MAX=20 LOAD_TEST_TARGET=http://localhost:4000 npx artillery run tests/load/availability-pipeline.yml
+// See config/db-config.js for per-environment pool presets
+const POOL_MAX = parseInt(process.env.SEQUELIZE_POOL_MAX || '5', 10);
+
 let sequelize;
 
 // Railway and many hosting platforms provide DATABASE_URL
@@ -64,7 +70,7 @@ if (databaseUrl) {
       application_name: 'boardgame-backend',
     },
     pool: {
-      max: 5,
+      max: POOL_MAX,
       min: 0,
       acquire: 60000, // Increased for Railway
       idle: 10000,
@@ -104,6 +110,12 @@ if (databaseUrl) {
       dialectOptions: {
         ssl: false,
         connectTimeout: 10000,
+      },
+      pool: {
+        max: POOL_MAX,
+        min: 0,
+        acquire: 30000,
+        idle: 10000,
       },
     }
   );
