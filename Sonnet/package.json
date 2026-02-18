@@ -14,7 +14,9 @@
         "test:setup": "node scripts/setup-test-db.js",
         "db:create": "node scripts/create-database.js",
         "seed": "node scripts/seed-sample-data.js",
-        "email:dev": "npx react-email dev --dir emails --port 3001"
+        "email:dev": "npx react-email dev --dir emails --port 3001",
+        "load:generate-tokens": "node scripts/generate-load-test-tokens.js",
+        "load:test": "npx artillery run tests/load/availability-pipeline.yml"
     },
     "dependencies": {
         "@bull-board/api": "^6.18.0",
@@ -46,6 +48,7 @@
         "xml2js": "^0.6.2"
     },
     "devDependencies": {
+        "artillery": "^2.0.30",
         "jest": "^29.7.0",
         "nodemon": "^3.0.1",
         "supertest": "^6.3.3"

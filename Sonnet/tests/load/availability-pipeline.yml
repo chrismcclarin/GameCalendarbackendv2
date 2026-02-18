@@ -1,0 +1,50 @@
+# Run with: SEQUELIZE_POOL_MAX=20 LOAD_TEST_TARGET=http://localhost:4000 npx artillery run tests/load/availability-pipeline.yml
+# Prerequisites: Generate tokens first: npm run load:generate-tokens
+# Note: test-tokens.csv is gitignored (ephemeral, generated per environment)
+
+config:
+  target: "{{ $env.LOAD_TEST_TARGET || 'http://localhost:4000' }}"
+  phases:
+    - name: "Warm up"
+      duration: 30
+      arrivalRate: 5
+    - name: "Ramp to 50 concurrent"
+      duration: 60
+      arrivalRate: 5
+      rampTo: 50
+    - name: "Sustained 50 req/s"
+      duration: 120
+      arrivalRate: 50
+  plugins:
+    expect: {}
+  ensure:
+    thresholds:
+      - http.response_time.p95: 1000
+      - http.response_time.p99: 2000
+  payload:
+    path: "./test-tokens.csv"
+    fields:
+      - "token"
+      - "timezone"
+
+scenarios:
+  - name: "Submit availability response"
+    weight: 80
+    flow:
+      - post:
+          url: "/api/availability-responses"
+          json:
+            magic_token: "{{ token }}"
+            time_slots:
+              - start: "2026-03-15T10:00:00Z"
+                end: "2026-03-15T12:00:00Z"
+                preference: "preferred"
+            user_timezone: "{{ timezone }}"
+
+  - name: "Health check"
+    weight: 20
+    flow:
+      - get:
+          url: "/health"
+          expect:
+            - statusCode: 200

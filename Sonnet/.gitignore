@@ -89,6 +89,9 @@ tabletopbackend_v2_rewrite.zip
 # Test database
 test_db/
 
+# Load test tokens (ephemeral, generated per environment)
+tests/load/test-tokens.csv
+
 # PM2
 .pm2/
 
