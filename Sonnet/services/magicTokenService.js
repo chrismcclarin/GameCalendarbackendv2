@@ -19,7 +19,7 @@ const TOKEN_ISSUER = 'nextgamenight.app';
  * @returns {Promise<string>} JWT token string
  * @throws {Error} If MAGIC_TOKEN_SECRET is not set
  */
-async function generateToken(user, prompt) {
+async function generateToken(user, prompt, expiryHours = EXPIRY_HOURS) {
   if (!process.env.MAGIC_TOKEN_SECRET) {
     throw new Error('MAGIC_TOKEN_SECRET environment variable is required');
   }
@@ -28,7 +28,7 @@ async function generateToken(user, prompt) {
   const tokenId = crypto.randomBytes(32).toString('hex');
 
   // Calculate expiry timestamp
-  const expiresAt = new Date(Date.now() + EXPIRY_HOURS * 60 * 60 * 1000);
+  const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000);
 
   // Create JWT with required claims
   // Note: User model has 'username' field, but we use 'name' claim for display
@@ -46,7 +46,7 @@ async function generateToken(user, prompt) {
     },
     process.env.MAGIC_TOKEN_SECRET,
     {
-      expiresIn: `${EXPIRY_HOURS}h`,
+      expiresIn: `${expiryHours}h`,
       algorithm: 'HS256'
     }
   );
