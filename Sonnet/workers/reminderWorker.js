@@ -2,10 +2,13 @@
 // Processes reminder email jobs with frequency limit (max 2 per user per prompt)
 const { Worker } = require('bullmq');
 const Redis = require('ioredis');
-const { AvailabilityPrompt, AvailabilityResponse, UserGroup, User, Group } = require('../models');
+const { AvailabilityPrompt, AvailabilityResponse, UserGroup, User, Group, GroupPromptSettings } = require('../models');
 const { Op } = require('sequelize');
 const emailService = require('../services/emailService');
 const magicTokenService = require('../services/magicTokenService');
+const React = require('react');
+const { render } = require('@react-email/render');
+const { AvailabilityPrompt: AvailabilityPromptEmail } = require('../emails');
 
 // Optional Sentry integration
 let Sentry = null;
@@ -40,6 +43,12 @@ const reminderWorker = new Worker('reminders', async (job) => {
   if (!group) {
     return { skipped: true, reason: 'group_not_found' };
   }
+
+  // Load group prompt settings for token expiry configuration
+  const settings = await GroupPromptSettings.findOne({
+    where: { group_id: prompt.group_id }
+  });
+  const expiryHours = settings?.default_token_expiry_hours || 168;
 
   // Get group members
   const memberships = await UserGroup.findAll({
@@ -91,19 +100,36 @@ const reminderWorker = new Worker('reminders', async (job) => {
 
     try {
       // Generate new magic token for reminder email
-      const tokenData = await magicTokenService.generateToken(userId, promptId);
-      const availabilityUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/availability/${tokenData.token}`;
+      const token = await magicTokenService.generateToken(
+        { user_id: user.user_id, username: user.username },
+        { id: prompt.id },
+        expiryHours
+      );
+      const availabilityUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/availability-form/${token}`;
 
       // Send reminder email
       const reminderLabel = reminderType === '50-percent' ? 'halfway' : 'final';
+      const emailComponent = React.createElement(AvailabilityPromptEmail, {
+        recipientName: user.username || 'there',
+        groupName: group.name,
+        weekDescription: `(${reminderLabel} reminder)`,
+        responseDeadline: prompt.deadline
+          ? prompt.deadline.toLocaleString('en-US', {
+              weekday: 'short', month: 'short', day: 'numeric',
+              hour: 'numeric', minute: '2-digit', timeZoneName: 'short'
+            })
+          : 'soon',
+        formUrl: availabilityUrl,
+        unsubscribeUrl: undefined
+      });
+      const html = await render(emailComponent);
+      const text = await render(emailComponent, { plainText: true });
+
       await emailService.send({
         to: user.email,
         subject: `Reminder: ${group.name} - Submit your availability`,
-        html: `<p>Hi ${user.username || 'there'},</p>
-               <p>This is a ${reminderLabel} reminder to submit your availability for ${group.name}.</p>
-               <p><a href="${availabilityUrl}">Click here to submit your availability</a></p>
-               <p>The deadline is approaching!</p>`,
-        text: `Hi ${user.username || 'there'},\n\nThis is a ${reminderLabel} reminder to submit your availability for ${group.name}.\n\nSubmit your availability: ${availabilityUrl}\n\nThe deadline is approaching!`,
+        html,
+        text,
         groupName: group.name,
         promptId: promptId,
         emailType: 'reminder'
