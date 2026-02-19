@@ -36,7 +36,7 @@ async function aggregateResponses(promptId) {
       include: [{
         model: Game,
         required: false,
-        attributes: ['id', 'minPlayers', 'min_players']
+        attributes: ['id', 'min_players']
       }],
       transaction
     });
@@ -51,7 +51,7 @@ async function aggregateResponses(promptId) {
     let minParticipants = 2; // Default
     if (prompt.Game) {
       // Handle both naming conventions (camelCase and snake_case)
-      minParticipants = prompt.Game.minPlayers || prompt.Game.min_players || 2;
+      minParticipants = prompt.Game.min_players || 2;
     }
 
     // Fetch all responses for this prompt

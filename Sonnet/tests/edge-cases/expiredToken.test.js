@@ -40,9 +40,9 @@ describe('Expired magic token handling', () => {
     });
   });
 
-  afterAll(async () => {
-    await sequelize.close();
-  });
+  // Note: sequelize.close() is handled globally by tests/setup.js
+  // Do NOT close here — closing in individual test files breaks subsequent files
+  // when Jest runs multiple edge case tests in the same worker process.
 
   it('should reject a JWT past its expiry', async () => {
     // Sign a token with expiresIn: '-1h' — already expired by 1 hour
