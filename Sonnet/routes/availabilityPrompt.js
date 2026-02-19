@@ -3,6 +3,7 @@
 
 const express = require('express');
 const router = express.Router();
+const { Op } = require('sequelize');
 const { verifyAuth0Token } = require('../middleware/auth0');
 const {
   AvailabilityPrompt,
@@ -336,6 +337,46 @@ router.post('/prompts', verifyAuth0Token, async (req, res) => {
   } catch (error) {
     console.error('Error creating prompt:', error);
     res.status(500).json({ error: 'Failed to create prompt' });
+  }
+});
+
+
+/**
+ * GET /api/groups/:groupId/prompts/active
+ * Get the most recent active or pending AvailabilityPrompt for a group.
+ *
+ * Protected by Auth0 token (group members only).
+ * Returns: { prompt: <AvailabilityPrompt | null> }
+ *
+ * Used by the group planning page to discover the current prompt ID before
+ * fetching suggestions or rendering ResponseDashboard.
+ */
+router.get('/groups/:groupId/prompts/active', verifyAuth0Token, async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const requestingUserId = req.user.user_id; // auth0.js sets req.user.user_id = decoded.sub
+
+    // Verify requester is a member of the group
+    const userGroup = await UserGroup.findOne({
+      where: { group_id: groupId, user_id: requestingUserId }
+    });
+    if (!userGroup) {
+      return res.status(403).json({ error: 'You must be a member of this group' });
+    }
+
+    // Find the most recent active or pending prompt for this group
+    const prompt = await AvailabilityPrompt.findOne({
+      where: {
+        group_id: groupId,
+        status: { [Op.in]: ['active', 'pending'] }
+      },
+      order: [['createdAt', 'DESC']]
+    });
+
+    res.json({ prompt: prompt || null });
+  } catch (error) {
+    console.error('Error fetching active prompt:', error);
+    res.status(500).json({ error: 'Failed to fetch active prompt' });
   }
 });
 
