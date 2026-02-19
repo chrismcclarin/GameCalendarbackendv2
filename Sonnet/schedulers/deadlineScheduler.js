@@ -29,7 +29,7 @@ async function processExpiredPrompt(prompt) {
 
     if (bestSuggestion) {
       // Auto-create event from best suggestion
-      const event = await eventCreationService.convertSuggestionToEvent(
+      const result = await eventCreationService.convertSuggestionToEvent(
         bestSuggestion.id,
         null,  // No specific creator for auto-scheduled
         { isAutoScheduled: true }
@@ -38,7 +38,7 @@ async function processExpiredPrompt(prompt) {
       // Update prompt status
       await prompt.update({ status: 'converted' });
 
-      console.log(`Auto-created event ${event.id} from suggestion ${bestSuggestion.id}`);
+      console.log(`Auto-created event ${result.event_id} from suggestion ${bestSuggestion.id}`);
     } else {
       // No viable suggestion - notify admin
       await notifyAdminNoConsensus(prompt);
