@@ -356,17 +356,25 @@ const startServer = async () => {
 
       // Start deadline scheduler (only in production or if explicitly enabled)
       if (process.env.NODE_ENV === 'production' || process.env.ENABLE_SCHEDULER === 'true') {
-        deadlineJob.start();
-        console.log('Deadline scheduler started (node-cron)');
+        try {
+          deadlineJob.start();
+          console.log('Deadline scheduler started (node-cron)');
+        } catch (err) {
+          console.error('Deadline scheduler failed to start:', err.message, err.stack);
+        }
       } else {
         console.log('Deadline scheduler disabled (set ENABLE_SCHEDULER=true to enable)');
       }
 
       // Start BullMQ workers (only in production or if explicitly enabled)
       if (process.env.NODE_ENV === 'production' || process.env.ENABLE_WORKERS === 'true') {
-        const { promptWorker, deadlineWorker, reminderWorker } = require('./workers');
-        const { syncPromptSchedulesToQueue } = require('./schedulers/promptScheduler');
-        syncPromptSchedulesToQueue().catch(err => console.error('Failed to sync prompt schedules:', err.message));
+        try {
+          const { promptWorker, deadlineWorker, reminderWorker } = require('./workers');
+          const { syncPromptSchedulesToQueue } = require('./schedulers/promptScheduler');
+          syncPromptSchedulesToQueue().catch(err => console.error('Failed to sync prompt schedules:', err.message));
+        } catch (err) {
+          console.error('BullMQ workers failed to start:', err.message, err.stack);
+        }
       } else {
         console.log('BullMQ workers disabled (set ENABLE_WORKERS=true to enable)');
       }
