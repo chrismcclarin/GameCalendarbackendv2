@@ -73,7 +73,7 @@ async function generateToken(user, prompt, expiryHours = EXPIRY_HOURS) {
  *   - valid: boolean - Whether token is valid
  *   - decoded: Object - Decoded JWT claims (if valid)
  *   - tokenRecord: MagicToken - Database record (if valid)
- *   - reason: string - Failure reason (if invalid): 'invalid_token', 'token_not_found', 'token_revoked', 'token_expired'
+ *   - reason: string - Failure reason (if invalid): 'invalid_token', 'token_not_found', 'token_revoked', 'token_expired', 'already_used'
  *   - graceUsed: boolean - Whether grace period was applied (if valid)
  */
 async function validateToken(token, formLoadedAt = null) {
@@ -97,6 +97,10 @@ async function validateToken(token, formLoadedAt = null) {
 
     if (tokenRecord.status === 'revoked') {
       return { valid: false, reason: 'token_revoked' };
+    }
+
+    if (tokenRecord.usage_count >= 1) {
+      return { valid: false, reason: 'already_used' };
     }
 
     // Update usage tracking
@@ -157,6 +161,10 @@ async function handleExpiredToken(token, formLoadedAt) {
 
   if (tokenRecord.status === 'revoked') {
     return { valid: false, reason: 'token_revoked' };
+  }
+
+  if (tokenRecord.usage_count >= 1) {
+    return { valid: false, reason: 'already_used' };
   }
 
   // Check grace period conditions
