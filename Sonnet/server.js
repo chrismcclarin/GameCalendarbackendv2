@@ -57,6 +57,7 @@ const availabilityResponseRoutes = require('./routes/availabilityResponse');
 const availabilitySuggestionRoutes = require('./routes/availabilitySuggestion');
 const availabilityPromptRoutes = require('./routes/availabilityPrompt');
 const adminMetricsRoutes = require('./routes/adminMetrics');
+const tokenRoutes = require('./routes/tokens');
 
 // Scheduler for deadline-based auto-scheduling
 const { deadlineJob } = require('./schedulers/deadlineScheduler');
@@ -255,6 +256,8 @@ app.use('/api', writeOperationLimiter, availabilitySuggestionRoutes);
 app.use('/api', writeOperationLimiter, availabilityPromptRoutes);
 // Admin metrics dashboard (protected by Auth0 token)
 app.use('/api', adminMetricsRoutes);
+// Token analytics (requires Auth0 token)
+app.use('/api/tokens', verifyAuth0Token, tokenRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
