@@ -38,6 +38,10 @@ Group.belongsToMany(User, {
 });
 
 
+// UserGroup → User (direct association for worker include queries)
+UserGroup.belongsTo(User, { foreignKey: 'user_id', targetKey: 'user_id' });
+User.hasMany(UserGroup, { foreignKey: 'user_id', sourceKey: 'user_id' });
+
 // Groups ↔ Events (One-to-Many)
 Group.hasMany(Event, { foreignKey: 'group_id' });
 Event.belongsTo(Group, { foreignKey: 'group_id' });
