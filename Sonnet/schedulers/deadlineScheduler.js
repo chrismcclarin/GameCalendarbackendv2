@@ -91,7 +91,7 @@ async function notifyAdminNoConsensus(prompt) {
   const { html, text } = emailService.generateNoConsensusEmailTemplate({
     groupName: group.name,
     promptId: prompt.id,
-    dashboardUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/groupPlanning?group_id=${group.id}`
+    dashboardUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/groupPlanning?group_id=${group.id}&prompt_id=${prompt.id}`
   });
 
   for (const admin of recipients) {

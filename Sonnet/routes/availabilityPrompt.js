@@ -381,4 +381,25 @@ router.get('/groups/:groupId/prompts/active', verifyAuth0Token, async (req, res)
 });
 
 
+/**
+ * GET /api/prompts/:promptId
+ * Returns a single prompt by ID (any status). Used by groupPlanning page
+ * when navigating from a no-consensus email link.
+ */
+router.get('/prompts/:promptId', verifyAuth0Token, async (req, res) => {
+  try {
+    const { promptId } = req.params;
+    const { AvailabilityPrompt } = require('../models');
+    const prompt = await AvailabilityPrompt.findByPk(promptId);
+    if (!prompt) {
+      return res.status(404).json({ error: 'Prompt not found' });
+    }
+    res.json({ prompt });
+  } catch (error) {
+    console.error('Error fetching prompt:', error);
+    res.status(500).json({ error: 'Failed to fetch prompt' });
+  }
+});
+
+
 module.exports = router;
