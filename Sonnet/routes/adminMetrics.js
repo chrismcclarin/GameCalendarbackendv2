@@ -113,4 +113,27 @@ router.get('/admin/metrics', verifyAuth0Token, async (req, res) => {
   }
 });
 
+/**
+ * POST /api/admin/trigger-prompt-job
+ * Manually enqueue a job to the prompts queue for testing.
+ * Body: { groupId, settingsId, timezone }
+ */
+router.post('/admin/trigger-prompt-job', verifyAuth0Token, async (req, res) => {
+  const queues = getQueues();
+  if (!queues) {
+    return res.status(503).json({ error: 'Queue system not available' });
+  }
+  const { groupId, settingsId, timezone = 'UTC' } = req.body;
+  if (!groupId || !settingsId) {
+    return res.status(400).json({ error: 'groupId and settingsId are required' });
+  }
+  try {
+    const job = await queues.promptQueue.add('send-availability-prompt', { groupId, settingsId, timezone });
+    res.json({ message: 'Job enqueued', jobId: job.id });
+  } catch (err) {
+    console.error('[AdminMetrics] Failed to enqueue prompt job:', err.message);
+    res.status(500).json({ error: 'Failed to enqueue job', message: err.message });
+  }
+});
+
 module.exports = router;
