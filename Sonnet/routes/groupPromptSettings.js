@@ -62,13 +62,7 @@ router.get('/:group_id/prompt-settings', async (req, res) => {
     }
 
     // Verify group exists
-    const group = await Group.findByPk(group_id, {
-      include: [{
-        model: Game,
-        through: { attributes: [] }, // Exclude junction table attributes
-        attributes: ['id', 'name', 'image_url', 'min_players', 'max_players']
-      }]
-    });
+    const group = await Group.findByPk(group_id);
 
     if (!group) {
       return res.status(404).json({ error: 'Group not found' });

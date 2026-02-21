@@ -48,7 +48,7 @@ router.get('/admin/metrics', verifyAuth0Token, async (req, res) => {
     // Token validation failures (expired or revoked tokens in last 30 days)
     const tokenFailures = await MagicToken.count({
       where: {
-        status: { [Op.in]: ['expired', 'revoked'] },
+        status: { [Op.in]: ['revoked'] },
         updatedAt: { [Op.gte]: since }
       }
     });
