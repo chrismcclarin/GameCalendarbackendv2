@@ -66,7 +66,7 @@ function calculateDeadline(deadlineHours) {
 }
 
 const promptWorker = new Worker('prompts', async (job) => {
-  const { groupId, settingsId, timezone } = job.data;
+  const { groupId, settingsId, timezone, deadlineMinutes } = job.data;
   console.log(`[PromptWorker] Processing job for group ${groupId}`);
 
   // Idempotency check: avoid duplicate prompts for same week
@@ -87,7 +87,9 @@ const promptWorker = new Worker('prompts', async (job) => {
     throw new Error(`GroupPromptSettings ${settingsId} not found`);
   }
 
-  const deadline = calculateDeadline(settings.default_deadline_hours || 72);
+  const deadline = deadlineMinutes
+    ? new Date(Date.now() + deadlineMinutes * 60 * 1000)
+    : calculateDeadline(settings.default_deadline_hours || 72);
 
   // Create the prompt
   const prompt = await AvailabilityPrompt.create({

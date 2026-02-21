@@ -122,7 +122,7 @@ router.post('/admin/trigger-prompt-job', verifyAuth0Token, async (req, res) => {
   if (!queues) {
     return res.status(503).json({ error: 'Queue system not available' });
   }
-  const { groupId, settingsId, timezone = 'UTC' } = req.body;
+  const { groupId, settingsId, timezone = 'UTC', deadlineMinutes } = req.body;
   if (!groupId || !settingsId) {
     return res.status(400).json({ error: 'groupId and settingsId are required' });
   }
@@ -144,7 +144,10 @@ router.post('/admin/trigger-prompt-job', verifyAuth0Token, async (req, res) => {
       console.log(`[AdminMetrics] Cleared ${deleted} existing prompt(s) for ${groupId} week ${weekIdentifier} before test run`);
     }
 
-    const job = await queues.promptQueue.add('send-availability-prompt', { groupId, settingsId, timezone });
+    const job = await queues.promptQueue.add('send-availability-prompt', {
+      groupId, settingsId, timezone,
+      ...(deadlineMinutes ? { deadlineMinutes } : {})
+    });
     res.json({ message: 'Job enqueued', jobId: job.id, clearedExisting: deleted });
   } catch (err) {
     console.error('[AdminMetrics] Failed to enqueue prompt job:', err.message);
