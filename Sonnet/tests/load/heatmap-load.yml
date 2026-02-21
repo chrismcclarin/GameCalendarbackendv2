@@ -1,0 +1,30 @@
+# Run with: LOAD_TEST_TARGET=https://your-backend.railway.app LOAD_TEST_BEARER_TOKEN=<auth0_token> LOAD_TEST_PROMPT_ID=<uuid> npx artillery run tests/load/heatmap-load.yml
+# Prerequisites: Obtain a valid Auth0 bearer token for a user who is a member of the prompt's group
+# LOAD_TEST_BEARER_TOKEN: Get by logging in at the frontend, opening browser DevTools Network tab,
+#   finding any /api/ request, and copying the Authorization header value (without "Bearer " prefix)
+# LOAD_TEST_PROMPT_ID: UUID of an active AvailabilityPrompt — find via GET /api/prompts or the DB
+
+config:
+  target: "{{ $env.LOAD_TEST_TARGET || 'http://localhost:4000' }}"
+  phases:
+    - name: "Warm up"
+      duration: 30
+      arrivalRate: 5
+    - name: "Sustained load"
+      duration: 60
+      arrivalRate: 20
+  plugins:
+    expect: {}
+  ensure:
+    thresholds:
+      - http.response_time.p95: 2000
+
+scenarios:
+  - name: "Heatmap aggregation"
+    flow:
+      - get:
+          url: "/api/prompts/{{ $env.LOAD_TEST_PROMPT_ID }}/suggestions"
+          headers:
+            Authorization: "Bearer {{ $env.LOAD_TEST_BEARER_TOKEN }}"
+          expect:
+            - statusCode: 200
