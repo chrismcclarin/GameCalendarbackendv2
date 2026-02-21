@@ -27,7 +27,7 @@ router.post('/validate', magicTokenLimiter, async (req, res) => {
       });
     }
 
-    const result = await validateToken(token, formLoadedAt);
+    const result = await validateToken(token, formLoadedAt, { consume: false });
 
     if (!result.valid) {
       // Track failed validation (fire-and-forget)

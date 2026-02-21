@@ -69,14 +69,16 @@ async function generateToken(user, prompt, expiryHours = EXPIRY_HOURS) {
  *
  * @param {string} token - JWT token string
  * @param {string|null} formLoadedAt - ISO timestamp when form was loaded (for grace period)
+ * @param {Object} options
+ * @param {boolean} options.consume - If true, increment usage_count (default: false)
  * @returns {Promise<Object>} Validation result
  *   - valid: boolean - Whether token is valid
  *   - decoded: Object - Decoded JWT claims (if valid)
  *   - tokenRecord: MagicToken - Database record (if valid)
- *   - reason: string - Failure reason (if invalid): 'invalid_token', 'token_not_found', 'token_revoked', 'token_expired', 'already_used'
+ *   - reason: string - Failure reason (if invalid): 'invalid_token', 'token_not_found', 'token_revoked', 'token_expired'
  *   - graceUsed: boolean - Whether grace period was applied (if valid)
  */
-async function validateToken(token, formLoadedAt = null) {
+async function validateToken(token, formLoadedAt = null, { consume = false } = {}) {
   try {
     // Verify JWT signature, audience, issuer, and expiry
     const decoded = jwt.verify(token, process.env.MAGIC_TOKEN_SECRET, {
@@ -99,14 +101,10 @@ async function validateToken(token, formLoadedAt = null) {
       return { valid: false, reason: 'token_revoked' };
     }
 
-    if (tokenRecord.usage_count >= 1) {
-      return { valid: false, reason: 'already_used' };
-    }
-
     // Update usage tracking
     await tokenRecord.update({
       last_used_at: new Date(),
-      usage_count: tokenRecord.usage_count + 1
+      ...(consume ? { usage_count: tokenRecord.usage_count + 1 } : {})
     });
 
     return { valid: true, decoded, tokenRecord };
@@ -115,7 +113,7 @@ async function validateToken(token, formLoadedAt = null) {
     // Handle JWT-specific errors
     if (err.name === 'TokenExpiredError') {
       // Check if grace period applies
-      return await handleExpiredToken(token, formLoadedAt);
+      return await handleExpiredToken(token, formLoadedAt, { consume });
     }
 
     if (err.name === 'JsonWebTokenError' || err.name === 'NotBeforeError') {
@@ -138,7 +136,7 @@ async function validateToken(token, formLoadedAt = null) {
  * @param {string|null} formLoadedAt - ISO timestamp when form was loaded
  * @returns {Promise<Object>} Validation result
  */
-async function handleExpiredToken(token, formLoadedAt) {
+async function handleExpiredToken(token, formLoadedAt, { consume = false } = {}) {
   // No grace period without form load context
   if (!formLoadedAt) {
     return { valid: false, reason: 'token_expired' };
@@ -163,10 +161,6 @@ async function handleExpiredToken(token, formLoadedAt) {
     return { valid: false, reason: 'token_revoked' };
   }
 
-  if (tokenRecord.usage_count >= 1) {
-    return { valid: false, reason: 'already_used' };
-  }
-
   // Check grace period conditions
   const now = new Date();
   const expiresAt = new Date(tokenRecord.expires_at);
@@ -177,10 +171,9 @@ async function handleExpiredToken(token, formLoadedAt) {
   // 1. Form was loaded before token expired
   // 2. Current time is within grace period (expiry + 5 minutes)
   if (formLoadedDate < expiresAt && now <= gracePeriodEnd) {
-    // Update usage tracking
     await tokenRecord.update({
       last_used_at: now,
-      usage_count: tokenRecord.usage_count + 1
+      ...(consume ? { usage_count: tokenRecord.usage_count + 1 } : {})
     });
 
     return { valid: true, decoded, tokenRecord, graceUsed: true };

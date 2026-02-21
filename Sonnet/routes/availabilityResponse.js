@@ -4,6 +4,7 @@
 
 const express = require('express');
 const router = express.Router();
+const { UniqueConstraintError } = require('sequelize');
 const { validateToken } = require('../services/magicTokenService');
 const { AvailabilityPrompt, AvailabilityResponse } = require('../models');
 const { magicTokenLimiter } = require('../middleware/rateLimiter');
@@ -68,7 +69,7 @@ router.post('/', magicTokenLimiter, async (req, res) => {
     }
 
     // 2. Validate magic token
-    const tokenResult = await validateToken(magic_token);
+    const tokenResult = await validateToken(magic_token, null, { consume: false });
 
     if (!tokenResult.valid) {
       // Generic error message for all token failures (security)
@@ -132,12 +133,31 @@ router.post('/', magicTokenLimiter, async (req, res) => {
       response = existingResponse;
       updated = true;
     } else {
-      // Create new response
-      response = await AvailabilityResponse.create({
-        prompt_id: promptId,
-        user_id: userId,
-        ...responseData
-      });
+      // Create new response — handle race condition where a concurrent request
+      // creates the record between our findOne check and this create call
+      try {
+        response = await AvailabilityResponse.create({
+          prompt_id: promptId,
+          user_id: userId,
+          ...responseData
+        });
+      } catch (createErr) {
+        if (createErr instanceof UniqueConstraintError) {
+          // Concurrent request already created the record — find and update it
+          const raceRecord = await AvailabilityResponse.findOne({
+            where: { prompt_id: promptId, user_id: userId }
+          });
+          if (raceRecord) {
+            await raceRecord.update(responseData);
+            response = raceRecord;
+            updated = true;
+          } else {
+            throw createErr; // Unexpected state — re-throw
+          }
+        } else {
+          throw createErr;
+        }
+      }
     }
 
     res.status(200).json({
@@ -178,7 +198,7 @@ router.get('/:promptId', magicTokenLimiter, async (req, res) => {
     }
 
     // Validate magic token
-    const tokenResult = await validateToken(magic_token);
+    const tokenResult = await validateToken(magic_token, null, { consume: false });
 
     if (!tokenResult.valid) {
       return res.status(400).json({
