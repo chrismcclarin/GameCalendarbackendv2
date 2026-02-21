@@ -61,22 +61,19 @@ router.get('/admin/metrics', verifyAuth0Token, async (req, res) => {
     const queues = getQueues();
     if (queues) {
       try {
-        const { MetricsTime } = require('bullmq');
         const { promptQueue, deadlineQueue, reminderQueue } = queues;
 
-        const [promptCompleted, promptFailed, deadlineCompleted, deadlineFailed] = await Promise.all([
-          promptQueue.getMetrics('completed', 0, MetricsTime.ONE_WEEK).catch(() => ({ count: 0 })),
-          promptQueue.getMetrics('failed', 0, MetricsTime.ONE_WEEK).catch(() => ({ count: 0 })),
-          deadlineQueue.getMetrics('completed', 0, MetricsTime.ONE_WEEK).catch(() => ({ count: 0 })),
-          deadlineQueue.getMetrics('failed', 0, MetricsTime.ONE_WEEK).catch(() => ({ count: 0 }))
+        const [promptCounts, deadlineCounts, reminderCounts] = await Promise.all([
+          promptQueue.getJobCounts('completed', 'failed', 'waiting', 'active', 'delayed'),
+          deadlineQueue.getJobCounts('completed', 'failed', 'waiting', 'active', 'delayed'),
+          reminderQueue.getJobCounts('completed', 'failed', 'waiting', 'active', 'delayed')
         ]);
 
         queueMetrics = {
           available: true,
-          prompts_completed_7d: promptCompleted.count,
-          prompts_failed_7d: promptFailed.count,
-          deadlines_completed_7d: deadlineCompleted.count,
-          deadlines_failed_7d: deadlineFailed.count
+          prompts: promptCounts,
+          deadlines: deadlineCounts,
+          reminders: reminderCounts
         };
       } catch (queueErr) {
         queueMetrics = { available: false, reason: queueErr.message };
@@ -116,6 +113,8 @@ router.get('/admin/metrics', verifyAuth0Token, async (req, res) => {
 /**
  * POST /api/admin/trigger-prompt-job
  * Manually enqueue a job to the prompts queue for testing.
+ * Clears any existing prompt for this group+week so the idempotency
+ * check in promptWorker doesn't skip the job.
  * Body: { groupId, settingsId, timezone }
  */
 router.post('/admin/trigger-prompt-job', verifyAuth0Token, async (req, res) => {
@@ -128,8 +127,25 @@ router.post('/admin/trigger-prompt-job', verifyAuth0Token, async (req, res) => {
     return res.status(400).json({ error: 'groupId and settingsId are required' });
   }
   try {
+    // Compute the current ISO week (same logic as promptWorker)
+    const now = new Date();
+    const d = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+    const dayNum = d.getUTCDay() || 7;
+    d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+    const weekNum = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+    const weekIdentifier = `${d.getUTCFullYear()}-W${String(weekNum).padStart(2, '0')}`;
+
+    // Delete any existing prompt for this group+week so the idempotency check passes
+    const deleted = await AvailabilityPrompt.destroy({
+      where: { group_id: groupId, week_identifier: weekIdentifier }
+    });
+    if (deleted > 0) {
+      console.log(`[AdminMetrics] Cleared ${deleted} existing prompt(s) for ${groupId} week ${weekIdentifier} before test run`);
+    }
+
     const job = await queues.promptQueue.add('send-availability-prompt', { groupId, settingsId, timezone });
-    res.json({ message: 'Job enqueued', jobId: job.id });
+    res.json({ message: 'Job enqueued', jobId: job.id, clearedExisting: deleted });
   } catch (err) {
     console.error('[AdminMetrics] Failed to enqueue prompt job:', err.message);
     res.status(500).json({ error: 'Failed to enqueue job', message: err.message });
