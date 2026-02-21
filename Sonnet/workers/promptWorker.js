@@ -5,6 +5,7 @@ const Redis = require('ioredis');
 const { AvailabilityPrompt, Group, GroupPromptSettings, UserGroup, User } = require('../models');
 const magicTokenService = require('../services/magicTokenService');
 const emailService = require('../services/emailService');
+const { scheduleReminders, scheduleDeadlineJob } = require('../services/reminderService');
 
 function buildPromptEmailHtml({ recipientName, groupName, weekDescription, responseDeadline, formUrl }) {
   return `<!DOCTYPE html>
@@ -161,6 +162,15 @@ const promptWorker = new Worker('prompts', async (job) => {
     Sentry.metrics.count('availability_prompt.created', 1, {
       attributes: { group_id: String(groupId) }
     });
+  }
+
+  // Schedule reminder and deadline jobs now that the prompt is active
+  try {
+    await scheduleReminders(prompt);
+    await scheduleDeadlineJob(prompt);
+  } catch (scheduleErr) {
+    // Log but don't fail the job — emails were already sent
+    console.error(`[PromptWorker] Failed to schedule reminders/deadline for ${prompt.id}:`, scheduleErr.message);
   }
 
   console.log(`[PromptWorker] Created prompt ${prompt.id}, sent ${emailsSent} emails`);
