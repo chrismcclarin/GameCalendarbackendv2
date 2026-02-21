@@ -116,6 +116,7 @@ const promptWorker = new Worker('prompts', async (job) => {
       });
       const html = await render(emailComponent);
       const text = await render(emailComponent, { plainText: true });
+      console.log(`[PromptWorker] html length: ${html?.length ?? 'undefined'}, text length: ${text?.length ?? 'undefined'}, html preview: ${html?.substring(0, 80)}`);
 
       await emailService.send({
         to: user.email,
