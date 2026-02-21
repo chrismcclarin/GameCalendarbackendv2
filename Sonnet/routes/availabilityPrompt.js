@@ -30,7 +30,7 @@ const { scheduleReminders, scheduleDeadlineJob } = require('../services/reminder
 router.get('/prompts/:promptId/respondents', verifyAuth0Token, async (req, res) => {
   try {
     const { promptId } = req.params;
-    const requestingUserId = req.user.sub;
+    const requestingUserId = req.user.user_id;
 
     // 1. Get prompt with group
     const prompt = await AvailabilityPrompt.findByPk(promptId, {
@@ -135,7 +135,7 @@ router.get('/prompts/:promptId/respondents', verifyAuth0Token, async (req, res) 
 router.post('/prompts/:promptId/remind/:userId', verifyAuth0Token, async (req, res) => {
   try {
     const { promptId, userId } = req.params;
-    const requestingUserId = req.user.sub;
+    const requestingUserId = req.user.user_id;
 
     // 1. Get prompt with group and game
     const prompt = await AvailabilityPrompt.findByPk(promptId, {
@@ -269,7 +269,7 @@ router.post('/prompts/:promptId/remind/:userId', verifyAuth0Token, async (req, r
  */
 router.post('/prompts', verifyAuth0Token, async (req, res) => {
   try {
-    const requestingUserId = req.user.sub;
+    const requestingUserId = req.user.user_id;
     const {
       group_id,
       deadline,
