@@ -5,9 +5,34 @@ const Redis = require('ioredis');
 const { AvailabilityPrompt, Group, GroupPromptSettings, UserGroup, User } = require('../models');
 const magicTokenService = require('../services/magicTokenService');
 const emailService = require('../services/emailService');
-const React = require('react');
-const { render } = require('@react-email/render');
-const { AvailabilityPrompt: AvailabilityPromptEmail } = require('../emails');
+
+function buildPromptEmailHtml({ recipientName, groupName, weekDescription, responseDeadline, formUrl }) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f6f9fc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
+  <table width="100%" cellpadding="0" cellspacing="0" style="padding:20px 0">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:8px;overflow:hidden;max-width:600px;width:100%">
+        <tr><td style="padding:32px 40px">
+          <h1 style="margin:0 0 16px;font-size:24px;font-weight:bold;color:#111827">Hey ${recipientName}!</h1>
+          <p style="margin:0 0 16px;font-size:16px;line-height:1.6;color:#333">${groupName} is planning a game session! Let us know when you're free ${weekDescription}.</p>
+          <table width="100%" cellpadding="0" cellspacing="0" style="margin:24px 0;text-align:center">
+            <tr><td align="center">
+              <a href="${formUrl}" target="_blank" style="display:inline-block;padding:12px 24px;background:#4F46E5;color:#fff;text-decoration:none;border-radius:5px;font-weight:bold;font-size:16px">When Can You Play?</a>
+            </td></tr>
+          </table>
+          <p style="margin:0 0 16px;font-size:16px;line-height:1.6;color:#333">Please respond by ${responseDeadline} so we can find a time that works for everyone.</p>
+        </td></tr>
+        <tr><td style="padding:20px 40px;border-top:1px solid #e5e7eb;text-align:center">
+          <p style="margin:0;font-size:12px;color:#6b7280">Sent by NextGameNight on behalf of ${groupName}</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+}
 
 // Optional Sentry integration
 let Sentry = null;
@@ -100,23 +125,15 @@ const promptWorker = new Worker('prompts', async (job) => {
       );
       const availabilityUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/availability-form/${token}`;
 
-      const emailComponent = React.createElement(AvailabilityPromptEmail, {
-        recipientName: user.username || 'there',
-        groupName: group.name,
-        weekDescription: weekIdentifier,
-        responseDeadline: prompt.deadline
-          ? prompt.deadline.toLocaleString('en-US', {
-              weekday: 'short', month: 'short', day: 'numeric',
-              hour: 'numeric', minute: '2-digit', timeZoneName: 'short'
-            })
-          : 'soon',
-        formUrl: availabilityUrl,
-        minPlayers: settings.min_participants || undefined,
-        unsubscribeUrl: undefined
-      });
-      const html = await render(emailComponent);
-      const text = await render(emailComponent, { plainText: true });
-      console.log(`[PromptWorker] html length: ${html?.length ?? 'undefined'}, text length: ${text?.length ?? 'undefined'}, html preview: ${html?.substring(0, 80)}`);
+      const recipientName = user.username || 'there';
+      const deadlineStr = prompt.deadline
+        ? prompt.deadline.toLocaleString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric',
+            hour: 'numeric', minute: '2-digit', timeZoneName: 'short'
+          })
+        : 'soon';
+      const html = buildPromptEmailHtml({ recipientName, groupName: group.name, weekDescription: weekIdentifier, responseDeadline: deadlineStr, formUrl: availabilityUrl });
+      const text = `Hi ${recipientName},\n\n${group.name} is planning a game session! Let us know when you're free ${weekIdentifier}.\n\nRespond here: ${availabilityUrl}\n\nPlease respond by ${deadlineStr}.\n\nSent by NextGameNight on behalf of ${group.name}`;
 
       await emailService.send({
         to: user.email,
