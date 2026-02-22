@@ -23,12 +23,17 @@ function verifySendGridSignature(publicKey, payload, signature, timestamp) {
     const timestampPayload = timestamp + payload;
     const decodedSignature = Buffer.from(signature, 'base64');
 
+    // Wrap in PEM headers if the key is raw base64 (no headers)
+    const pemKey = publicKey.includes('-----BEGIN')
+      ? publicKey
+      : `-----BEGIN PUBLIC KEY-----\n${publicKey}\n-----END PUBLIC KEY-----`;
+
     const verifier = crypto.createVerify('sha256');
     verifier.update(timestampPayload);
 
     return verifier.verify(
       {
-        key: publicKey,
+        key: pemKey,
         format: 'pem',
         type: 'spki'
       },
@@ -46,15 +51,17 @@ function verifySendGridSignature(publicKey, payload, signature, timestamp) {
  *
  * POST /api/webhooks/sendgrid
  */
-router.post('/sendgrid', express.json(), async (req, res) => {
+router.post('/sendgrid', express.raw({ type: 'application/json' }), async (req, res) => {
+  const rawBody = req.body.toString('utf8');
+  req.body = JSON.parse(rawBody);
+
   const publicKey = process.env.SENDGRID_WEBHOOK_VERIFICATION_KEY;
   const signature = req.headers['x-twilio-email-event-webhook-signature'];
   const timestamp = req.headers['x-twilio-email-event-webhook-timestamp'];
 
   // Verify signature if verification key is configured
   if (publicKey) {
-    const payload = JSON.stringify(req.body);
-    if (!verifySendGridSignature(publicKey, payload, signature, timestamp)) {
+    if (!verifySendGridSignature(publicKey, rawBody, signature, timestamp)) {
       console.warn('SendGrid webhook signature verification failed.');
       return res.status(401).json({ error: 'Invalid signature' });
     }
