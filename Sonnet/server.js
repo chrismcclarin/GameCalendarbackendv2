@@ -211,7 +211,7 @@ app.use((req, res, next) => {
 });
 
 // 3. Request body parsing with size limit
-app.use(express.json({ limit: '10mb' })); // Limit request body size
+app.use(express.json({ limit: '10mb', verify: (req, _res, buf) => { req.rawBody = buf; } })); // Limit request body size
 
 // 4. Request logging for security auditing
 app.use(requestLogger);

@@ -51,9 +51,9 @@ function verifySendGridSignature(publicKey, payload, signature, timestamp) {
  *
  * POST /api/webhooks/sendgrid
  */
-router.post('/sendgrid', express.raw({ type: 'application/json' }), async (req, res) => {
-  const rawBody = req.body.toString('utf8');
-  req.body = JSON.parse(rawBody);
+router.post('/sendgrid', async (req, res) => {
+  // req.body is already parsed by global express.json(); raw bytes are in req.rawBody (set via verify callback)
+  const rawBody = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body);
 
   const publicKey = process.env.SENDGRID_WEBHOOK_VERIFICATION_KEY;
   const signature = req.headers['x-twilio-email-event-webhook-signature'];
