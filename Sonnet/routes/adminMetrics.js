@@ -32,11 +32,12 @@ router.get('/admin/metrics', verifyAuth0Token, async (req, res) => {
     const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000); // last 30 days
 
     // Email deliverability metrics from EmailMetrics table
+    // source_type filter excludes pre-migration rows (tagged 'unknown_pre_migration') and test events
     const [totalDelivered, totalOpens, totalSpam, totalBounce] = await Promise.all([
-      EmailMetrics.count({ where: { event_type: 'delivered', occurred_at: { [Op.gte]: since } } }),
-      EmailMetrics.count({ where: { event_type: 'open', sg_machine_open: false, occurred_at: { [Op.gte]: since } } }),
-      EmailMetrics.count({ where: { event_type: 'spamreport', occurred_at: { [Op.gte]: since } } }),
-      EmailMetrics.count({ where: { event_type: 'bounce', occurred_at: { [Op.gte]: since } } })
+      EmailMetrics.count({ where: { event_type: 'delivered', source_type: 'sendgrid_live', occurred_at: { [Op.gte]: since } } }),
+      EmailMetrics.count({ where: { event_type: 'open', sg_machine_open: false, source_type: 'sendgrid_live', occurred_at: { [Op.gte]: since } } }),
+      EmailMetrics.count({ where: { event_type: 'spamreport', source_type: 'sendgrid_live', occurred_at: { [Op.gte]: since } } }),
+      EmailMetrics.count({ where: { event_type: 'bounce', source_type: 'sendgrid_live', occurred_at: { [Op.gte]: since } } })
     ]);
 
     // Availability response rate: magic tokens sent vs responses submitted

@@ -96,7 +96,8 @@ router.post('/sendgrid', async (req, res) => {
             email_hash: email ? crypto.createHash('sha256').update(email).digest('hex') : null,
             prompt_id: event.prompt_id || null,
             occurred_at: new Date(event.timestamp * 1000 || Date.now()),
-            sg_machine_open: false
+            sg_machine_open: false,
+            source_type: 'sendgrid_live'
           });
         } catch (e) { console.error('[Webhooks] Failed to persist delivered event:', e.message); }
         break;
@@ -110,7 +111,8 @@ router.post('/sendgrid', async (req, res) => {
             email_hash: email ? crypto.createHash('sha256').update(email).digest('hex') : null,
             prompt_id: event.prompt_id || null,
             occurred_at: new Date(event.timestamp * 1000 || Date.now()),
-            sg_machine_open: false
+            sg_machine_open: false,
+            source_type: 'sendgrid_live'
           });
         } catch (e) { console.error('[Webhooks] Failed to persist bounce event:', e.message); }
         break;
@@ -132,7 +134,8 @@ router.post('/sendgrid', async (req, res) => {
             email_hash: email ? crypto.createHash('sha256').update(email).digest('hex') : null,
             prompt_id: event.prompt_id || null,
             occurred_at: new Date(event.timestamp * 1000 || Date.now()),
-            sg_machine_open: false
+            sg_machine_open: false,
+            source_type: 'sendgrid_live'
           });
         } catch (e) { console.error('[Webhooks] Failed to persist spamreport event:', e.message); }
         break;
@@ -153,7 +156,8 @@ router.post('/sendgrid', async (req, res) => {
               email_hash: email ? crypto.createHash('sha256').update(email).digest('hex') : null,
               prompt_id: event.prompt_id || null,
               occurred_at: new Date(event.timestamp * 1000 || Date.now()),
-              sg_machine_open: false
+              sg_machine_open: false,
+              source_type: 'sendgrid_live'
             });
           } catch (e) { console.error('[Webhooks] Failed to persist open event:', e.message); }
         } else {

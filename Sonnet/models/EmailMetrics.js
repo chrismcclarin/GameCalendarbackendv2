@@ -36,6 +36,13 @@ const EmailMetrics = sequelize.define('EmailMetrics', {
     type: DataTypes.BOOLEAN,
     defaultValue: false
     // Machine opens (Apple MPP, security gateways) must NOT be counted in open rate
+  },
+  source_type: {
+    type: DataTypes.STRING(50),
+    allowNull: true,
+    defaultValue: null
+    // 'sendgrid_live' for real production events
+    // 'unknown_pre_migration' for rows created before this migration
   }
 }, {
   tableName: 'email_metrics',
