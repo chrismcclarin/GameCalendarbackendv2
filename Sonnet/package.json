@@ -17,7 +17,8 @@
         "email:dev": "npx react-email dev --dir emails --port 3001",
         "load:generate-tokens": "node scripts/generate-load-test-tokens.js",
         "load:test": "npx artillery run tests/load/availability-pipeline.yml",
-        "load:test:heatmap": "npx artillery run tests/load/heatmap-load.yml"
+        "load:test:heatmap": "npx artillery run tests/load/heatmap-load.yml",
+        "db:migrate:email-metrics": "node migrations/20260218000001-create-email-metrics.js"
     },
     "dependencies": {
         "@bull-board/api": "^6.18.0",
