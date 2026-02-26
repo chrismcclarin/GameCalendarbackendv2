@@ -2,65 +2,60 @@
 const express = require('express');
 const router = express.Router();
 const { validateFeedback } = require('../middleware/validators');
-
-// Store feedback in memory (in production, you'd want to use a database or email service)
-// For now, we'll just log it and return success
-const feedbackLog = [];
+const emailService = require('../services/emailService');
 
 // Submit bug report or suggestion
 router.post('/', validateFeedback, async (req, res) => {
   try {
     const { type, subject, description, user_email, user_id } = req.body;
-    
-    const feedback = {
-      id: Date.now().toString(),
-      type,
-      subject,
-      description,
-      user_email: user_email || null,
-      user_id: user_id || null,
-      timestamp: new Date().toISOString(),
-    };
-    
-    // Log the feedback (in production, save to database or send email)
-    feedbackLog.push(feedback);
-    // Sanitized logging - don't expose user email or ID
-    if (process.env.NODE_ENV === 'development') {
-      console.log('=== FEEDBACK SUBMISSION ===');
-      console.log('Type:', type);
-      console.log('Subject:', subject);
-      console.log('Description:', description);
-      console.log('User ID provided:', user_id ? 'Yes' : 'No');
-      console.log('Timestamp:', feedback.timestamp);
-      console.log('==========================');
-    } else {
-      // Production logging - minimal info
-      console.log(`Feedback submitted: ${type} - ${subject.substring(0, 50)}${subject.length > 50 ? '...' : ''}`);
+
+    const feedbackId = Date.now().toString();
+    const timestamp = new Date().toISOString();
+
+    console.log(`Feedback submitted: ${type} - ${subject.substring(0, 50)}${subject.length > 50 ? '...' : ''}`);
+
+    // Send email notification to admin
+    const adminEmail = process.env.FEEDBACK_EMAIL;
+    if (adminEmail && emailService.isConfigured()) {
+      const html = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <div style="background-color: #064e3b; color: white; padding: 16px 20px; border-radius: 6px 6px 0 0;">
+            <h2 style="margin: 0;">New Feedback — Next Game Night</h2>
+          </div>
+          <div style="background-color: #f9fafb; padding: 24px; border-radius: 0 0 6px 6px; border: 1px solid #e5e7eb;">
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr><td style="padding: 8px 0; color: #6b7280; width: 120px;"><strong>Type</strong></td><td style="padding: 8px 0;">${type}</td></tr>
+              <tr><td style="padding: 8px 0; color: #6b7280;"><strong>Subject</strong></td><td style="padding: 8px 0;">${subject}</td></tr>
+              <tr><td style="padding: 8px 0; color: #6b7280;"><strong>From</strong></td><td style="padding: 8px 0;">${user_email || 'Anonymous'}</td></tr>
+              <tr><td style="padding: 8px 0; color: #6b7280;"><strong>Time</strong></td><td style="padding: 8px 0;">${new Date(timestamp).toLocaleString()}</td></tr>
+            </table>
+            <div style="margin-top: 16px; padding: 16px; background: white; border-radius: 4px; border-left: 4px solid #d97706;">
+              <strong style="color: #6b7280;">Description</strong>
+              <p style="margin: 8px 0 0; color: #111827;">${description}</p>
+            </div>
+          </div>
+        </div>
+      `.trim();
+
+      const text = `New Feedback — Next Game Night\n\nType: ${type}\nSubject: ${subject}\nFrom: ${user_email || 'Anonymous'}\nTime: ${new Date(timestamp).toLocaleString()}\n\n${description}`;
+
+      await emailService.send({
+        to: adminEmail,
+        subject: `[Feedback] ${type}: ${subject}`,
+        html,
+        text,
+        ...(user_email && { replyTo: user_email }),
+      });
     }
-    
-    // In production, you might want to:
-    // 1. Save to database
-    // 2. Send email notification
-    // 3. Create a ticket in a bug tracking system
-    
-    res.json({ 
+
+    res.json({
       message: 'Thank you for your feedback! We appreciate your input.',
-      feedback_id: feedback.id
+      feedback_id: feedbackId,
     });
   } catch (error) {
     console.error('Error submitting feedback:', error);
     res.status(500).json({ error: error.message });
   }
-});
-
-// Get all feedback (for admin use - in production, add authentication)
-// SECURITY: This endpoint should be protected in production
-// For now, only allow in development mode
-router.get('/', (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(403).json({ error: 'This endpoint is not available in production' });
-  }
-  res.json(feedbackLog);
 });
 
 module.exports = router;
