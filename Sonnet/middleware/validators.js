@@ -236,7 +236,7 @@ const validateFeedback = [
     .isLength({ min: 1, max: 2000 })
     .withMessage('Description must be between 1 and 2000 characters'),
   body('user_email')
-    .optional()
+    .optional({ nullable: true })
     .isEmail()
     .withMessage('User email must be a valid email address'),
   validate
