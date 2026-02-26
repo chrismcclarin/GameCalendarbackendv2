@@ -8,4 +8,4 @@ cmds = ["npm ci"]
 cmds = ["npm run build || true"]
 
 [start]
-cmd = "npm run start:migrate"
+cmd = "npm start"
