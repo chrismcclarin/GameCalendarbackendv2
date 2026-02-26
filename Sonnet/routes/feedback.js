@@ -2,6 +2,8 @@
 const express = require('express');
 const router = express.Router();
 const { validateFeedback } = require('../middleware/validators');
+const { verifyAuth0Token } = require('../middleware/auth0');
+const { Feedback } = require('../models');
 const emailService = require('../services/emailService');
 
 // Submit bug report or suggestion
@@ -9,12 +11,18 @@ router.post('/', validateFeedback, async (req, res) => {
   try {
     const { type, subject, description, user_email, user_id } = req.body;
 
-    const feedbackId = Date.now().toString();
-    const timestamp = new Date().toISOString();
+    // Save to database
+    const entry = await Feedback.create({
+      type,
+      subject,
+      description,
+      user_email: user_email || null,
+      user_id: user_id || null,
+    });
 
-    console.log(`Feedback submitted: ${type} - ${subject.substring(0, 50)}${subject.length > 50 ? '...' : ''}`);
+    console.log(`Feedback saved: ${type} - ${subject.substring(0, 50)}${subject.length > 50 ? '...' : ''}`);
 
-    // Send email notification to admin
+    // Email notification to admin
     const adminEmail = process.env.FEEDBACK_EMAIL;
     if (adminEmail && emailService.isConfigured()) {
       const html = `
@@ -27,7 +35,7 @@ router.post('/', validateFeedback, async (req, res) => {
               <tr><td style="padding: 8px 0; color: #6b7280; width: 120px;"><strong>Type</strong></td><td style="padding: 8px 0;">${type}</td></tr>
               <tr><td style="padding: 8px 0; color: #6b7280;"><strong>Subject</strong></td><td style="padding: 8px 0;">${subject}</td></tr>
               <tr><td style="padding: 8px 0; color: #6b7280;"><strong>From</strong></td><td style="padding: 8px 0;">${user_email || 'Anonymous'}</td></tr>
-              <tr><td style="padding: 8px 0; color: #6b7280;"><strong>Time</strong></td><td style="padding: 8px 0;">${new Date(timestamp).toLocaleString()}</td></tr>
+              <tr><td style="padding: 8px 0; color: #6b7280;"><strong>Time</strong></td><td style="padding: 8px 0;">${new Date(entry.created_at).toLocaleString()}</td></tr>
             </table>
             <div style="margin-top: 16px; padding: 16px; background: white; border-radius: 4px; border-left: 4px solid #d97706;">
               <strong style="color: #6b7280;">Description</strong>
@@ -37,7 +45,7 @@ router.post('/', validateFeedback, async (req, res) => {
         </div>
       `.trim();
 
-      const text = `New Feedback — Next Game Night\n\nType: ${type}\nSubject: ${subject}\nFrom: ${user_email || 'Anonymous'}\nTime: ${new Date(timestamp).toLocaleString()}\n\n${description}`;
+      const text = `New Feedback — Next Game Night\n\nType: ${type}\nSubject: ${subject}\nFrom: ${user_email || 'Anonymous'}\nTime: ${new Date(entry.created_at).toLocaleString()}\n\n${description}`;
 
       await emailService.send({
         to: adminEmail,
@@ -50,7 +58,7 @@ router.post('/', validateFeedback, async (req, res) => {
 
     res.json({
       message: 'Thank you for your feedback! We appreciate your input.',
-      feedback_id: feedbackId,
+      feedback_id: entry.id,
     });
   } catch (error) {
     console.error('Error submitting feedback:', error);
@@ -58,5 +66,17 @@ router.post('/', validateFeedback, async (req, res) => {
   }
 });
 
-module.exports = router;
+// GET /api/feedback — retrieve all submissions (admin only, requires Auth0 token)
+router.get('/', verifyAuth0Token, async (req, res) => {
+  try {
+    const entries = await Feedback.findAll({
+      order: [['created_at', 'DESC']],
+    });
+    res.json(entries);
+  } catch (error) {
+    console.error('Error fetching feedback:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
+module.exports = router;

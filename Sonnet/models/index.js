@@ -18,6 +18,7 @@ const AvailabilitySuggestion = require('./AvailabilitySuggestion');
 const MagicToken = require('./MagicToken');
 const TokenAnalytics = require('./TokenAnalytics');
 const EmailMetrics = require('./EmailMetrics');
+const Feedback = require('./Feedback');
 const sequelize = require('../config/database');
 
 
@@ -150,5 +151,6 @@ module.exports = {
   MagicToken,
   TokenAnalytics,
   EmailMetrics,
+  Feedback,
   sequelize,
 };
