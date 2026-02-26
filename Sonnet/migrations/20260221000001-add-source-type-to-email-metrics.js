@@ -5,17 +5,23 @@ const { DataTypes } = require('sequelize');
 
 async function up() {
   const queryInterface = sequelize.getQueryInterface();
-  await queryInterface.addColumn('email_metrics', 'source_type', {
-    type: DataTypes.STRING(50),
-    allowNull: true,
-    defaultValue: null,
-    comment: 'sendgrid_live for real events; null for pre-migration rows'
-  });
+  // Idempotent: check if column already exists before adding
+  const tableDescription = await queryInterface.describeTable('email_metrics');
+  if (!tableDescription.source_type) {
+    await queryInterface.addColumn('email_metrics', 'source_type', {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+      defaultValue: null,
+      comment: 'sendgrid_live for real events; null for pre-migration rows'
+    });
+    console.log('Added source_type column to email_metrics.');
+  } else {
+    console.log('source_type column already exists, skipping.');
+  }
   // Backfill existing rows as unknown (pre-migration, cannot distinguish)
   await queryInterface.sequelize.query(
     `UPDATE email_metrics SET source_type = 'unknown_pre_migration' WHERE source_type IS NULL`
   );
-  console.log('Added source_type column to email_metrics.');
 }
 
 async function down() {
