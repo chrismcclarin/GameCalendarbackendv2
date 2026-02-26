@@ -16,13 +16,10 @@ async function runMigrations() {
     // WARNING: Only use in development or for initial setup
     
     if (process.env.NODE_ENV === 'production') {
-      console.log('⚠️  WARNING: Running in production mode.');
-      console.log('⚠️  This script will use sync({ alter: false }) which only creates missing tables.');
-      console.log('⚠️  For production, use proper migrations instead.');
-      
-      // Only create tables if they don't exist (safe)
-      await sequelize.sync({ alter: false });
-      console.log('✅ Database tables synchronized (missing tables created).');
+      // In production, never call sequelize.sync() — it runs ALTER TABLE without IF NOT EXISTS
+      // and will fail if any column was added via a manual migration first.
+      // Schema is managed by migrations; just verify the connection is live.
+      console.log('Production mode: DB connection verified. Skipping sync (use migrations for schema changes).');
     } else {
       // Development: Use sync for convenience
       await sequelize.sync({ alter: false });
