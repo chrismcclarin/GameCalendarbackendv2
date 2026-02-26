@@ -42,7 +42,7 @@ class EmailService {
    * @param {string} [options.emailType] - Email type label (e.g. 'availability_prompt', 'reminder')
    * @returns {Promise<{success: boolean, id?: string, error?: string}>}
    */
-  async send({ to, subject, html, text, replyTo, groupName, promptId, emailType }) {
+  async send({ to, subject, html, text, replyTo, groupName, promptId, emailType, attachments }) {
     if (!this.isConfigured()) {
       console.warn('Email service not configured. Skipping email.');
       return { success: false, error: 'Email service not configured' };
@@ -66,7 +66,8 @@ class EmailService {
         ...(replyTo && { replyTo }),
         // customArgs enables webhook event attribution back to the originating prompt
         // SendGrid passes these through on open/delivered/bounce/spamreport events
-        ...(promptId && { customArgs: { prompt_id: String(promptId), email_type: emailType || 'notification' } })
+        ...(promptId && { customArgs: { prompt_id: String(promptId), email_type: emailType || 'notification' } }),
+        ...(attachments && attachments.length > 0 && { attachments })
       };
 
       const response = await sgMail.send(msg);

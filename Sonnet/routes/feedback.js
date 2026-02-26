@@ -9,7 +9,7 @@ const emailService = require('../services/emailService');
 // Submit bug report or suggestion
 router.post('/', validateFeedback, async (req, res) => {
   try {
-    const { type, subject, description, user_email, user_id } = req.body;
+    const { type, subject, description, user_email, user_id, screenshot_base64, screenshot_filename } = req.body;
 
     // Save to database
     const entry = await Feedback.create({
@@ -47,12 +47,27 @@ router.post('/', validateFeedback, async (req, res) => {
 
       const text = `New Feedback — Next Game Night\n\nType: ${type}\nSubject: ${subject}\nFrom: ${user_email || 'Anonymous'}\nTime: ${new Date(entry.created_at).toLocaleString()}\n\n${description}`;
 
+      // Build attachments array if screenshot provided
+      const attachments = [];
+      if (screenshot_base64 && screenshot_filename) {
+        const mimeType = screenshot_filename.match(/\.(png)$/i) ? 'image/png'
+          : screenshot_filename.match(/\.(gif)$/i) ? 'image/gif'
+          : 'image/jpeg';
+        attachments.push({
+          content: screenshot_base64,
+          filename: screenshot_filename,
+          type: mimeType,
+          disposition: 'attachment',
+        });
+      }
+
       await emailService.send({
         to: adminEmail,
         subject: `[Feedback] ${type}: ${subject}`,
         html,
         text,
         ...(user_email && { replyTo: user_email }),
+        ...(attachments.length > 0 && { attachments }),
       });
     }
 

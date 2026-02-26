@@ -239,6 +239,15 @@ const validateFeedback = [
     .optional({ nullable: true })
     .isEmail()
     .withMessage('User email must be a valid email address'),
+  body('screenshot_base64')
+    .optional({ nullable: true })
+    .isString()
+    .withMessage('Screenshot must be a base64 string'),
+  body('screenshot_filename')
+    .optional({ nullable: true })
+    .isString()
+    .isLength({ max: 255 })
+    .withMessage('Screenshot filename must be a string under 255 characters'),
   validate
 ];
 
