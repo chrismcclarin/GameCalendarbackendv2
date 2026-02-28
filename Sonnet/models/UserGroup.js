@@ -21,6 +21,11 @@ const UserGroup = sequelize.define('UserGroup', {
     type: DataTypes.ENUM('member', 'admin', 'owner'),
     defaultValue: 'member',
   },
+  status: {
+    type: DataTypes.ENUM('invited', 'active', 'declined'),
+    defaultValue: 'active',
+    allowNull: false,
+  },
   joined_at: {
     type: DataTypes.DATE,
     defaultValue: DataTypes.NOW,
@@ -34,6 +39,9 @@ const UserGroup = sequelize.define('UserGroup', {
     {
       fields: ['user_id', 'group_id'],
       unique: true
+    },
+    {
+      fields: ['status']
     }
   ]
 });
