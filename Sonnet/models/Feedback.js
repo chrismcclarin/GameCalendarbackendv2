@@ -32,6 +32,11 @@ const Feedback = sequelize.define('Feedback', {
     allowNull: true,
     // Auth0 user ID, null for anonymous submissions
   },
+  page_context: {
+    type: DataTypes.STRING(500),
+    allowNull: true,
+    // URL/page where the feedback was submitted from
+  },
 }, {
   tableName: 'feedback',
   timestamps: true,
