@@ -15,7 +15,7 @@ const Event = sequelize.define('Event', {
   },
   game_id: {
     type: DataTypes.UUID,
-    allowNull: false,
+    allowNull: true,
   },
   start_date: {
     type: DataTypes.DATE,
