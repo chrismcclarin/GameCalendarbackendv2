@@ -19,6 +19,7 @@ const MagicToken = require('./MagicToken');
 const TokenAnalytics = require('./TokenAnalytics');
 const EmailMetrics = require('./EmailMetrics');
 const Feedback = require('./Feedback');
+const Friendship = require('./Friendship');
 const sequelize = require('../config/database');
 
 
@@ -133,6 +134,13 @@ MagicToken.belongsTo(User, { foreignKey: 'user_id', targetKey: 'user_id' });
 AvailabilityPrompt.hasMany(MagicToken, { foreignKey: 'prompt_id' });
 MagicToken.belongsTo(AvailabilityPrompt, { foreignKey: 'prompt_id' });
 
+// Friendships (Social Graph)
+// Note: Uses sourceKey/targetKey because requester_id/addressee_id are STRING (Auth0 ID), not UUID
+User.hasMany(Friendship, { as: 'SentFriendRequests', foreignKey: 'requester_id', sourceKey: 'user_id' });
+User.hasMany(Friendship, { as: 'ReceivedFriendRequests', foreignKey: 'addressee_id', sourceKey: 'user_id' });
+Friendship.belongsTo(User, { as: 'Requester', foreignKey: 'requester_id', targetKey: 'user_id' });
+Friendship.belongsTo(User, { as: 'Addressee', foreignKey: 'addressee_id', targetKey: 'user_id' });
+
 
 module.exports = {
   User,
@@ -152,5 +160,6 @@ module.exports = {
   TokenAnalytics,
   EmailMetrics,
   Feedback,
+  Friendship,
   sequelize,
 };
