@@ -352,7 +352,7 @@ router.post('/', validateEventCreate, async (req, res) => {
         include: [{
           model: User,
           attributes: ['id', 'user_id', 'username', 'email', 'email_notifications_enabled', 'google_calendar_token', 'google_calendar_refresh_token', 'google_calendar_enabled'],
-          through: { attributes: ['role'] }
+          through: { where: { status: 'active' }, attributes: ['role'] }
         }]
       });
       
