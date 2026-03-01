@@ -59,6 +59,7 @@ const availabilityPromptRoutes = require('./routes/availabilityPrompt');
 const adminMetricsRoutes = require('./routes/adminMetrics');
 const tokenRoutes = require('./routes/tokens');
 const inviteRoutes = require('./routes/invites');
+const friendshipRoutes = require('./routes/friendships');
 
 // Scheduler for deadline-based auto-scheduling
 const { deadlineJob } = require('./schedulers/deadlineScheduler');
@@ -183,6 +184,7 @@ app.use((req, res, next) => {
     '/api/game-reviews',
     '/api/user-games',
     '/api/invites',
+    '/api/friendships',
   ];
   
   // Exclude public routes that don't require auth
@@ -263,6 +265,8 @@ app.use('/api', adminMetricsRoutes);
 app.use('/api/tokens', verifyAuth0Token, tokenRoutes);
 // Group invites (authenticated endpoints: send, accept, decline, pending, etc.)
 app.use('/api/invites', writeOperationLimiter, verifyAuth0Token, inviteRoutes);
+// Friendships (social graph: friend requests, accept, decline, remove)
+app.use('/api/friendships', writeOperationLimiter, verifyAuth0Token, friendshipRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
