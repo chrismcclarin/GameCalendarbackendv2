@@ -1,6 +1,6 @@
 // routes/games.js
 const express = require('express');
-const { Game, Event, EventParticipation, GameReview, User, Group, UserGame } = require('../models');
+const { Game, Event, EventParticipation, GameReview, User, Group, UserGame, UserGroup } = require('../models');
 const { Op } = require('sequelize');
 const router = express.Router();
 
@@ -37,6 +37,141 @@ router.get('/', async (req, res) => {
     });
     
     res.json(games);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+// Unified search: local custom games + BGG results
+router.get('/search-all', async (req, res) => {
+  try {
+    const { query, group_id, user_id } = req.query;
+
+    // If query is too short or missing, return empty results
+    if (!query || query.trim().length < 2) {
+      return res.json({ local: [], bgg: [] });
+    }
+
+    let local = [];
+
+    // Local search: find games the user/group has used
+    if (user_id) {
+      try {
+        const user = await User.findOne({ where: { user_id } });
+        if (user) {
+          // Get all active group_ids for the user
+          const userGroups = await UserGroup.findAll({
+            where: { user_id: user.user_id, status: 'active' },
+            attributes: ['group_id']
+          });
+          const groupIds = userGroups.map(ug => ug.group_id);
+
+          // Get game_ids from events in those groups
+          let eventGameIds = [];
+          if (groupIds.length > 0) {
+            const events = await Event.findAll({
+              where: {
+                group_id: { [Op.in]: groupIds },
+                game_id: { [Op.not]: null }
+              },
+              attributes: ['game_id'],
+              group: ['game_id']
+            });
+            eventGameIds = events.map(e => e.game_id);
+          }
+
+          // Get game_ids from UserGame for this user
+          const userGames = await UserGame.findAll({
+            where: { user_id: user.id },
+            attributes: ['game_id']
+          });
+          const userGameIds = userGames.map(ug => ug.game_id);
+
+          // Combine unique game IDs
+          const allGameIds = [...new Set([...eventGameIds, ...userGameIds])];
+
+          if (allGameIds.length > 0) {
+            local = await Game.findAll({
+              where: {
+                id: { [Op.in]: allGameIds },
+                name: { [Op.iLike]: `%${query.trim()}%` }
+              },
+              attributes: ['id', 'name', 'bgg_id', 'is_custom', 'year_published'],
+              order: [['name', 'ASC']],
+              limit: 10
+            });
+          }
+        }
+      } catch (localError) {
+        console.warn('Local game search error (non-fatal):', localError.message);
+        // Continue with empty local results
+      }
+    }
+
+    // BGG search
+    let bgg = [];
+    try {
+      bgg = await bggCsvService.searchGames(query.trim(), 20);
+    } catch (bggError) {
+      console.warn('BGG search error (non-fatal):', bggError.message);
+      // Continue with empty BGG results
+    }
+
+    res.json({ local, bgg });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+// Resolve a game name to an existing custom game or create a new one
+router.post('/resolve', async (req, res) => {
+  try {
+    const { name } = req.body;
+
+    // Validate name
+    if (!name || typeof name !== 'string' || name.trim().length === 0) {
+      return res.status(400).json({ error: 'Game name is required' });
+    }
+
+    const trimmedName = name.trim();
+
+    // Case-insensitive exact match on custom games
+    let game = await Game.findOne({
+      where: {
+        name: { [Op.iLike]: trimmedName },
+        is_custom: true
+      }
+    });
+
+    if (game) {
+      return res.json(game);
+    }
+
+    // No match found -- create a new custom game
+    try {
+      game = await Game.create({
+        name: trimmedName,
+        is_custom: true,
+        bgg_id: null
+      });
+      return res.json(game);
+    } catch (createError) {
+      // Handle race condition: another request may have created it concurrently
+      if (createError.name === 'SequelizeUniqueConstraintError') {
+        game = await Game.findOne({
+          where: {
+            name: { [Op.iLike]: trimmedName },
+            is_custom: true
+          }
+        });
+        if (game) {
+          return res.json(game);
+        }
+      }
+      throw createError;
+    }
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
