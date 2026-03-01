@@ -20,6 +20,7 @@ const getUserRoleInGroup = async (user_id, group_id) => {
     where: {
       user_id: user.user_id,
       group_id: group_id,
+      status: 'active',
     },
   });
 
