@@ -366,7 +366,7 @@ router.post('/', validateEventCreate, async (req, res) => {
           const eventDataForCalendar = {
             start_date: start_date,
             duration_minutes: duration_minutes || 60,
-            game_name: game?.name || 'Board Game',
+            game_name: game?.name || 'Game Night',
             comments: comments || '',
             timezone: timezone || 'UTC' // Use user's timezone, fallback to UTC
           };
@@ -440,7 +440,7 @@ router.post('/', validateEventCreate, async (req, res) => {
             const eventUrl = `${process.env.FRONTEND_URL || process.env.AUTH0_BASE_URL || 'http://localhost:3000'}/group/${group_id}/event/${event.id}`;
             
             const eventDataForEmail = {
-              gameName: game?.name || 'Board Game',
+              gameName: game?.name || 'Game Night',
               groupName: group.name,
               startDate: start_date,
               startTime: startTime,

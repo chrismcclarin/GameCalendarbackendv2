@@ -108,14 +108,21 @@ const validateEventCreate = [
     .isUUID()
     .withMessage('Group ID must be a valid UUID'),
   body('game_id')
+    .optional({ nullable: true })
     .isUUID()
-    .withMessage('Game ID must be a valid UUID'),
+    .withMessage('Game ID must be a valid UUID when provided'),
+  body('game_name')
+    .optional({ nullable: true })
+    .trim()
+    .isLength({ min: 1, max: 255 })
+    .withMessage('Game name must be between 1 and 255 characters'),
   body('start_date')
     .isISO8601()
     .withMessage('Start date must be a valid ISO 8601 date'),
   body('duration_minutes')
+    .optional({ nullable: true })
     .isInt({ min: 1, max: 1440 })
-    .withMessage('Duration is required and must be between 1 and 1440 minutes (24 hours)'),
+    .withMessage('Duration must be between 1 and 1440 minutes when provided'),
   body('comments')
     .optional()
     .isLength({ max: 2000 })

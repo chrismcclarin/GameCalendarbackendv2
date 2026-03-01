@@ -254,7 +254,7 @@ async function sendConfirmationEmails(event, users, group, game) {
 
     // Generate email content
     const { html, text } = generateEventConfirmationEmailTemplate({
-      gameName: game?.name || 'TBD',
+      gameName: game?.name || 'Game Night',
       groupName: group?.name || 'Your Group',
       startDate: event.start_date,
       durationMinutes: event.duration_minutes,
@@ -278,7 +278,7 @@ async function sendConfirmationEmails(event, users, group, game) {
 
     // Send batch emails
     const result = await emailService.sendBatch(recipients, {
-      subject: `Game Night Confirmed: ${game?.name || 'Game Session'} - ${formatDateForEmail(event.start_date)}`,
+      subject: `Game Night Confirmed: ${game?.name || 'Game Night'} - ${formatDateForEmail(event.start_date)}`,
       html,
       text,
       groupName: group?.name
