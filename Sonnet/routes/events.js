@@ -85,14 +85,15 @@ const { validateEventCreate, validateEventUpdate, validateUUID } = require('../m
 const verifyUserInGroup = async (user_id, group_id) => {
   const user = await User.findOne({ where: { user_id } });
   if (!user) return false;
-  
+
   const userGroup = await UserGroup.findOne({
     where: {
       user_id: user.user_id, // Use user.user_id (Auth0 string) not user.id (UUID)
-      group_id: group_id
+      group_id: group_id,
+      status: 'active'
     }
   });
-  
+
   return !!userGroup;
 };
 
@@ -100,14 +101,15 @@ const verifyUserInGroup = async (user_id, group_id) => {
 const getUserRoleInGroup = async (user_id, group_id) => {
   const user = await User.findOne({ where: { user_id } });
   if (!user) return null;
-  
+
   const userGroup = await UserGroup.findOne({
     where: {
       user_id: user.user_id, // Use user.user_id (Auth0 string) not user.id (UUID)
-      group_id: group_id
+      group_id: group_id,
+      status: 'active'
     }
   });
-  
+
   return userGroup ? userGroup.role : null;
 };
 
@@ -201,7 +203,7 @@ router.get('/user/:user_id', async (req, res) => {
     
     // Get all groups the user belongs to
     const userGroups = await UserGroup.findAll({
-      where: { user_id: user.user_id }, // Use user.user_id (Auth0 string) not user.id (UUID)
+      where: { user_id: user.user_id, status: 'active' }, // Use user.user_id (Auth0 string) not user.id (UUID)
       attributes: ['group_id']
     });
     

@@ -276,6 +276,7 @@ router.get('/group/:group_id/overlaps',
           where: {
             group_id: req.params.group_id,
             user_id: verified_user_id,
+            status: 'active',
           },
         });
       } catch (dbError) {

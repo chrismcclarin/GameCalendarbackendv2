@@ -13,10 +13,11 @@ const getUserRoleInGroup = async (user_id, group_id) => {
   const userGroup = await UserGroup.findOne({
     where: {
       user_id: user.user_id, // Use user.user_id (Auth0 string) not user.id (UUID)
-      group_id: group_id
+      group_id: group_id,
+      status: 'active'
     }
   });
-  
+
   return userGroup ? userGroup.role : null;
 };
 
@@ -96,7 +97,7 @@ router.get('/user/:user_id', async (req, res) => {
     // Get all groups for this user using UserGroup join
     const { UserGroup } = require('../models');
     const userGroups = await UserGroup.findAll({
-      where: { user_id: user.user_id }, // Use user.user_id (Auth0 string) not user.id (UUID)
+      where: { user_id: user.user_id, status: 'active' }, // Use user.user_id (Auth0 string) not user.id (UUID)
       attributes: ['group_id']
     });
     
@@ -109,7 +110,7 @@ router.get('/user/:user_id', async (req, res) => {
         {
           model: User,
           attributes: ['id', 'username', 'user_id', 'email'],
-          through: { attributes: ['role', 'joined_at'] }
+          through: { where: { status: 'active' }, attributes: ['role', 'joined_at'] }
         },
         {
           model: Event,
@@ -185,7 +186,7 @@ router.get('/:group_id/users', async (req, res) => {
       include: [{
         model: User,
         attributes: ['id', 'username', 'user_id', 'email'],
-        through: { attributes: ['role', 'joined_at'] }
+        through: { where: { status: 'active' }, attributes: ['role', 'joined_at'] }
       }]
     });
     
@@ -266,14 +267,15 @@ router.put('/:group_id/users/:target_user_id/role', async (req, res) => {
     const targetUserGroup = await UserGroup.findOne({
       where: {
         user_id: targetUser.user_id, // Use targetUser.user_id (Auth0 string) not targetUser.id (UUID)
-        group_id: group_id
+        group_id: group_id,
+        status: 'active'
       }
     });
-    
+
     if (!targetUserGroup) {
       return res.status(404).json({ error: 'User is not a member of this group' });
     }
-    
+
     // If trying to change own role and they're the owner, don't allow demotion
     if (requestingUser.id === targetUser.id && targetUserGroup.role === 'owner' && role !== 'owner') {
       return res.status(400).json({ error: 'Group owner cannot change their own role' });
@@ -371,14 +373,15 @@ router.delete('/:group_id/users/:target_user_id', async (req, res) => {
     const targetUserGroup = await UserGroup.findOne({
       where: {
         user_id: targetUser.user_id, // Use targetUser.user_id (Auth0 string) not targetUser.id (UUID)
-        group_id: group_id
+        group_id: group_id,
+        status: 'active'
       }
     });
-    
+
     if (!targetUserGroup) {
       return res.status(404).json({ error: 'User is not a member of this group' });
     }
-    
+
     await targetUserGroup.destroy();
     
     res.json({ message: 'User removed from group successfully' });

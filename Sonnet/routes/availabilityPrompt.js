@@ -43,7 +43,7 @@ router.get('/prompts/:promptId/respondents', verifyAuth0Token, async (req, res) 
 
     // 2. Verify requester is a member of the group
     const requesterGroup = await UserGroup.findOne({
-      where: { group_id: prompt.group_id, user_id: requestingUserId }
+      where: { group_id: prompt.group_id, user_id: requestingUserId, status: 'active' }
     });
 
     if (!requesterGroup) {
@@ -52,9 +52,9 @@ router.get('/prompts/:promptId/respondents', verifyAuth0Token, async (req, res) 
 
     const isAdmin = ['owner', 'admin'].includes(requesterGroup.role);
 
-    // 3. Get all group members
+    // 3. Get all active group members
     const groupMembers = await UserGroup.findAll({
-      where: { group_id: prompt.group_id },
+      where: { group_id: prompt.group_id, status: 'active' },
       include: [{
         model: User,
         attributes: ['user_id', 'username', 'email']
@@ -151,7 +151,7 @@ router.post('/prompts/:promptId/remind/:userId', verifyAuth0Token, async (req, r
 
     // 2. Verify requester is admin/owner of the group
     const userGroup = await UserGroup.findOne({
-      where: { group_id: prompt.group_id, user_id: requestingUserId }
+      where: { group_id: prompt.group_id, user_id: requestingUserId, status: 'active' }
     });
 
     if (!userGroup || !['owner', 'admin'].includes(userGroup.role)) {
@@ -192,7 +192,7 @@ router.post('/prompts/:promptId/remind/:userId', verifyAuth0Token, async (req, r
 
     // 7. Verify target user is in the group
     const targetUserGroup = await UserGroup.findOne({
-      where: { group_id: prompt.group_id, user_id: userId }
+      where: { group_id: prompt.group_id, user_id: userId, status: 'active' }
     });
     if (!targetUserGroup) {
       return res.status(400).json({ error: 'User is not a member of this group' });
@@ -294,7 +294,7 @@ router.post('/prompts', verifyAuth0Token, async (req, res) => {
 
     // Verify requester is admin/owner
     const userGroup = await UserGroup.findOne({
-      where: { group_id, user_id: requestingUserId }
+      where: { group_id, user_id: requestingUserId, status: 'active' }
     });
 
     if (!userGroup || !['owner', 'admin'].includes(userGroup.role)) {
@@ -358,7 +358,7 @@ router.get('/groups/:groupId/prompts/active', verifyAuth0Token, async (req, res)
 
     // Verify requester is a member of the group
     const userGroup = await UserGroup.findOne({
-      where: { group_id: groupId, user_id: requestingUserId }
+      where: { group_id: groupId, user_id: requestingUserId, status: 'active' }
     });
     if (!userGroup) {
       return res.status(403).json({ error: 'You must be a member of this group' });
