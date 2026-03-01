@@ -20,6 +20,7 @@ const TokenAnalytics = require('./TokenAnalytics');
 const EmailMetrics = require('./EmailMetrics');
 const Feedback = require('./Feedback');
 const Friendship = require('./Friendship');
+const GroupInvite = require('./GroupInvite');
 const sequelize = require('../config/database');
 
 
@@ -141,6 +142,13 @@ User.hasMany(Friendship, { as: 'ReceivedFriendRequests', foreignKey: 'addressee_
 Friendship.belongsTo(User, { as: 'Requester', foreignKey: 'requester_id', targetKey: 'user_id' });
 Friendship.belongsTo(User, { as: 'Addressee', foreignKey: 'addressee_id', targetKey: 'user_id' });
 
+// Group Invites
+Group.hasMany(GroupInvite, { foreignKey: 'group_id' });
+GroupInvite.belongsTo(Group, { foreignKey: 'group_id' });
+// Note: Uses sourceKey/targetKey because invited_by is STRING (Auth0 ID), not UUID
+User.hasMany(GroupInvite, { as: 'SentInvites', foreignKey: 'invited_by', sourceKey: 'user_id' });
+GroupInvite.belongsTo(User, { as: 'Inviter', foreignKey: 'invited_by', targetKey: 'user_id' });
+
 
 module.exports = {
   User,
@@ -161,5 +169,6 @@ module.exports = {
   EmailMetrics,
   Feedback,
   Friendship,
+  GroupInvite,
   sequelize,
 };
