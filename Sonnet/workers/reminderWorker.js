@@ -75,9 +75,9 @@ const reminderWorker = new Worker('reminders', async (job) => {
   });
   const expiryHours = settings?.default_token_expiry_hours || 168;
 
-  // Get group members
+  // Get active group members only (exclude pending/declined invites)
   const memberships = await UserGroup.findAll({
-    where: { group_id: prompt.group_id },
+    where: { group_id: prompt.group_id, status: 'active' },
     include: [{
       model: User,
       where: { email_notifications_enabled: { [Op.ne]: false } },

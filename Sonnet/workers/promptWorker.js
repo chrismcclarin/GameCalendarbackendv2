@@ -102,9 +102,9 @@ const promptWorker = new Worker('prompts', async (job) => {
     blind_voting_enabled: settings.template_config?.blind_voting || false
   });
 
-  // Get group members
+  // Get active group members only (exclude pending/declined invites)
   const memberships = await UserGroup.findAll({
-    where: { group_id: groupId },
+    where: { group_id: groupId, status: 'active' },
     include: [{
       model: User,
       required: true

@@ -8,14 +8,15 @@ const router = express.Router();
 const verifyUserInGroup = async (user_id, group_id) => {
   const user = await User.findOne({ where: { user_id } });
   if (!user) return false;
-  
+
   const userGroup = await UserGroup.findOne({
     where: {
       user_id: user.user_id, // Use user.user_id (Auth0 string) not user.id (UUID)
-      group_id: group_id
+      group_id: group_id,
+      status: 'active'
     }
   });
-  
+
   return !!userGroup;
 };
 

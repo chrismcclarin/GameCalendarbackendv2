@@ -1,0 +1,503 @@
+// routes/invites.js
+// Group invite endpoints: send, accept, decline, pending, accept-by-token, info-by-token, group-pending
+const express = require('express');
+const crypto = require('crypto');
+const { Op } = require('sequelize');
+const sequelize = require('../config/database');
+const { Group, User, UserGroup, GroupInvite } = require('../models');
+const { body, validationResult } = require('express-validator');
+const emailService = require('../services/emailService');
+
+const router = express.Router();
+
+// Helper function to get user's role in a group
+// Copied from routes/groups.js to avoid cross-module dependency
+const getUserRoleInGroup = async (user_id, group_id) => {
+  const user = await User.findOne({ where: { user_id } });
+  if (!user) return null;
+
+  const userGroup = await UserGroup.findOne({
+    where: {
+      user_id: user.user_id,
+      group_id: group_id,
+    },
+  });
+
+  return userGroup ? userGroup.role : null;
+};
+
+// Helper function to check if user is owner or admin
+const isOwnerOrAdmin = async (user_id, group_id) => {
+  const role = await getUserRoleInGroup(user_id, group_id);
+  return role === 'owner' || role === 'admin';
+};
+
+// ============================================
+// GET /info/:token - Public endpoint (no auth)
+// Returns invite details for pre-login display
+// Note: This route is mounted separately in server.js BEFORE auth middleware
+// ============================================
+router.get('/info/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    const invite = await GroupInvite.findOne({
+      where: { token, status: 'pending' },
+      include: [
+        {
+          model: Group,
+          attributes: ['name'],
+        },
+        {
+          model: User,
+          as: 'Inviter',
+          attributes: ['username'],
+        },
+      ],
+    });
+
+    if (!invite) {
+      return res.status(404).json({ error: 'Invite not found' });
+    }
+
+    // Count active group members
+    const memberCount = await UserGroup.count({
+      where: { group_id: invite.group_id, status: 'active' },
+    });
+
+    // Return only display info -- no sensitive fields
+    res.json({
+      group_name: invite.Group ? invite.Group.name : 'Unknown Group',
+      inviter_name: invite.Inviter ? invite.Inviter.username : 'Someone',
+      member_count: memberCount,
+    });
+  } catch (error) {
+    console.error('Error fetching invite info:', error);
+    res.status(500).json({ error: 'Failed to fetch invite info' });
+  }
+});
+
+// ============================================
+// POST /send - Send a group invite by email
+// ============================================
+router.post(
+  '/send',
+  [
+    body('email').isEmail().normalizeEmail().withMessage('Valid email is required'),
+    body('group_id').isUUID().withMessage('Valid group_id is required'),
+  ],
+  async (req, res) => {
+    try {
+      // Validate input
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const { email, group_id } = req.body;
+      const inviterUserId = req.user.user_id;
+      const normalizedEmail = email.toLowerCase();
+
+      // Permission check: Only owner or admin can invite
+      const hasPermission = await isOwnerOrAdmin(inviterUserId, group_id);
+      if (!hasPermission) {
+        return res.status(403).json({ error: 'Only group owners and admins can send invites' });
+      }
+
+      // Verify group exists
+      const group = await Group.findByPk(group_id);
+      if (!group) {
+        return res.status(404).json({ error: 'Group not found' });
+      }
+
+      // Check if email is already an active member
+      const existingUser = await User.findOne({
+        where: sequelize.where(
+          sequelize.fn('LOWER', sequelize.col('email')),
+          normalizedEmail
+        ),
+      });
+
+      if (existingUser) {
+        const activeUserGroup = await UserGroup.findOne({
+          where: {
+            user_id: existingUser.user_id,
+            group_id,
+            status: 'active',
+          },
+        });
+
+        if (activeUserGroup) {
+          return res.status(409).json({ error: 'This person is already a member of the group' });
+        }
+      }
+
+      // Check for existing pending invite
+      const existingInvite = await GroupInvite.findOne({
+        where: {
+          group_id,
+          invited_email: normalizedEmail,
+          status: 'pending',
+        },
+      });
+
+      if (existingInvite) {
+        return res.status(409).json({ error: 'This person already has a pending invite' });
+      }
+
+      // Generate secure token
+      const token = crypto.randomBytes(32).toString('hex');
+
+      // Create GroupInvite row
+      const invite = await GroupInvite.create({
+        group_id,
+        invited_email: normalizedEmail,
+        invited_by: inviterUserId,
+        token,
+        status: 'pending',
+      });
+
+      // If invited email matches an existing user, also create/update UserGroup row
+      if (existingUser) {
+        const [userGroup, created] = await UserGroup.findOrCreate({
+          where: {
+            user_id: existingUser.user_id,
+            group_id,
+          },
+          defaults: {
+            user_id: existingUser.user_id,
+            group_id,
+            role: 'member',
+            status: 'invited',
+          },
+        });
+
+        // If UserGroup already exists with 'declined' status, update to 'invited'
+        if (!created && userGroup.status === 'declined') {
+          await userGroup.update({ status: 'invited' });
+        }
+      }
+      // If email does NOT match any User: do NOT create User or UserGroup rows (GROUP-05)
+
+      // Send invite email
+      let emailSent = false;
+      if (emailService.isConfigured()) {
+        try {
+          // Get inviter info for the email
+          const inviter = await User.findOne({ where: { user_id: inviterUserId } });
+          const inviterName = inviter ? inviter.username : 'Someone';
+
+          // Count active group members
+          const memberCount = await UserGroup.count({
+            where: { group_id, status: 'active' },
+          });
+
+          const inviteUrl = `${emailService.frontendUrl}/invite/accept?token=${token}`;
+
+          const result = await emailService.sendGroupInviteNotification(normalizedEmail, {
+            inviterName,
+            groupName: group.name,
+            memberCount,
+            inviteUrl,
+          });
+
+          emailSent = result.success;
+        } catch (emailError) {
+          console.error('Failed to send invite email:', emailError.message);
+          // Email failure is not a blocker -- invite was still created
+          emailSent = false;
+        }
+      }
+
+      res.status(201).json({
+        success: true,
+        invite_id: invite.id,
+        emailSent,
+      });
+    } catch (error) {
+      console.error('Error sending invite:', error);
+      res.status(500).json({ error: 'Failed to send invite' });
+    }
+  }
+);
+
+// ============================================
+// GET /pending - Get current user's pending invites
+// ============================================
+router.get('/pending', async (req, res) => {
+  try {
+    const userId = req.user.user_id;
+
+    // Find user to get their email
+    const user = await User.findOne({ where: { user_id: userId } });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Find all pending invites for this user's email (case-insensitive)
+    const invites = await GroupInvite.findAll({
+      where: {
+        invited_email: sequelize.where(
+          sequelize.fn('LOWER', sequelize.col('invited_email')),
+          user.email.toLowerCase()
+        ),
+        status: 'pending',
+      },
+      include: [
+        {
+          model: Group,
+          attributes: ['id', 'name'],
+        },
+        {
+          model: User,
+          as: 'Inviter',
+          attributes: ['username'],
+        },
+      ],
+      order: [['createdAt', 'DESC']],
+    });
+
+    // Enrich with member counts
+    const enriched = await Promise.all(
+      invites.map(async (invite) => {
+        const memberCount = await UserGroup.count({
+          where: { group_id: invite.group_id, status: 'active' },
+        });
+
+        return {
+          id: invite.id,
+          group_id: invite.group_id,
+          group_name: invite.Group ? invite.Group.name : 'Unknown Group',
+          invited_by_name: invite.Inviter ? invite.Inviter.username : 'Someone',
+          member_count: memberCount,
+          created_at: invite.createdAt,
+          token: invite.token,
+        };
+      })
+    );
+
+    res.json(enriched);
+  } catch (error) {
+    console.error('Error fetching pending invites:', error);
+    res.status(500).json({ error: 'Failed to fetch pending invites' });
+  }
+});
+
+// ============================================
+// POST /:invite_id/accept - Accept a pending invite
+// ============================================
+router.post('/:invite_id/accept', async (req, res) => {
+  try {
+    const { invite_id } = req.params;
+    const userId = req.user.user_id;
+
+    // Find the pending invite
+    const invite = await GroupInvite.findOne({
+      where: { id: invite_id, status: 'pending' },
+    });
+
+    if (!invite) {
+      return res.status(404).json({ error: 'Pending invite not found' });
+    }
+
+    // Verify the authenticated user's email matches the invite
+    const user = await User.findOne({ where: { user_id: userId } });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (user.email.toLowerCase() !== invite.invited_email.toLowerCase()) {
+      return res.status(403).json({ error: 'This invite is not for you' });
+    }
+
+    // Update invite status
+    await invite.update({
+      status: 'accepted',
+      accepted_at: new Date(),
+    });
+
+    // Create or update UserGroup
+    const [userGroup, created] = await UserGroup.findOrCreate({
+      where: {
+        user_id: user.user_id,
+        group_id: invite.group_id,
+      },
+      defaults: {
+        user_id: user.user_id,
+        group_id: invite.group_id,
+        role: 'member',
+        status: 'active',
+        joined_at: new Date(),
+      },
+    });
+
+    // If found (already existed), update status to active
+    if (!created) {
+      await userGroup.update({
+        status: 'active',
+        joined_at: new Date(),
+      });
+    }
+
+    res.json({ success: true, group_id: invite.group_id });
+  } catch (error) {
+    console.error('Error accepting invite:', error);
+    res.status(500).json({ error: 'Failed to accept invite' });
+  }
+});
+
+// ============================================
+// POST /:invite_id/decline - Decline a pending invite
+// ============================================
+router.post('/:invite_id/decline', async (req, res) => {
+  try {
+    const { invite_id } = req.params;
+    const userId = req.user.user_id;
+
+    // Find the pending invite
+    const invite = await GroupInvite.findOne({
+      where: { id: invite_id, status: 'pending' },
+    });
+
+    if (!invite) {
+      return res.status(404).json({ error: 'Pending invite not found' });
+    }
+
+    // Verify the authenticated user's email matches
+    const user = await User.findOne({ where: { user_id: userId } });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (user.email.toLowerCase() !== invite.invited_email.toLowerCase()) {
+      return res.status(403).json({ error: 'This invite is not for you' });
+    }
+
+    // Update invite status
+    await invite.update({ status: 'declined' });
+
+    // If a UserGroup row exists with status 'invited', destroy it
+    await UserGroup.destroy({
+      where: {
+        user_id: user.user_id,
+        group_id: invite.group_id,
+        status: 'invited',
+      },
+    });
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error declining invite:', error);
+    res.status(500).json({ error: 'Failed to decline invite' });
+  }
+});
+
+// ============================================
+// POST /accept-by-token - Accept invite by token (email link flow)
+// ============================================
+router.post('/accept-by-token', async (req, res) => {
+  try {
+    const { token } = req.body;
+
+    if (!token) {
+      return res.status(400).json({ error: 'Token is required' });
+    }
+
+    const userId = req.user.user_id;
+
+    // Find the pending invite by token
+    const invite = await GroupInvite.findOne({
+      where: { token, status: 'pending' },
+    });
+
+    if (!invite) {
+      return res.status(404).json({ error: 'Pending invite not found' });
+    }
+
+    // Verify the authenticated user's email matches
+    const user = await User.findOne({ where: { user_id: userId } });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (user.email.toLowerCase() !== invite.invited_email.toLowerCase()) {
+      return res.status(403).json({ error: 'This invite is not for you' });
+    }
+
+    // Update invite status
+    await invite.update({
+      status: 'accepted',
+      accepted_at: new Date(),
+    });
+
+    // Create or update UserGroup
+    const [userGroup, created] = await UserGroup.findOrCreate({
+      where: {
+        user_id: user.user_id,
+        group_id: invite.group_id,
+      },
+      defaults: {
+        user_id: user.user_id,
+        group_id: invite.group_id,
+        role: 'member',
+        status: 'active',
+        joined_at: new Date(),
+      },
+    });
+
+    if (!created) {
+      await userGroup.update({
+        status: 'active',
+        joined_at: new Date(),
+      });
+    }
+
+    res.json({ success: true, group_id: invite.group_id });
+  } catch (error) {
+    console.error('Error accepting invite by token:', error);
+    res.status(500).json({ error: 'Failed to accept invite' });
+  }
+});
+
+// ============================================
+// GET /group/:group_id/pending - Get pending invites for a group
+// ============================================
+router.get('/group/:group_id/pending', async (req, res) => {
+  try {
+    const { group_id } = req.params;
+    const userId = req.user.user_id;
+
+    // Permission: Only owner/admin of the group
+    const hasPermission = await isOwnerOrAdmin(userId, group_id);
+    if (!hasPermission) {
+      return res.status(403).json({ error: 'Only group owners and admins can view pending invites' });
+    }
+
+    const invites = await GroupInvite.findAll({
+      where: { group_id, status: 'pending' },
+      include: [
+        {
+          model: User,
+          as: 'Inviter',
+          attributes: ['username'],
+        },
+      ],
+      attributes: ['id', 'invited_email', 'createdAt'],
+      order: [['createdAt', 'DESC']],
+    });
+
+    const result = invites.map((invite) => ({
+      id: invite.id,
+      invited_email: invite.invited_email,
+      invited_by_name: invite.Inviter ? invite.Inviter.username : 'Unknown',
+      created_at: invite.createdAt,
+    }));
+
+    res.json(result);
+  } catch (error) {
+    console.error('Error fetching group pending invites:', error);
+    res.status(500).json({ error: 'Failed to fetch pending invites' });
+  }
+});
+
+module.exports = router;

@@ -58,6 +58,7 @@ const availabilitySuggestionRoutes = require('./routes/availabilitySuggestion');
 const availabilityPromptRoutes = require('./routes/availabilityPrompt');
 const adminMetricsRoutes = require('./routes/adminMetrics');
 const tokenRoutes = require('./routes/tokens');
+const inviteRoutes = require('./routes/invites');
 
 // Scheduler for deadline-based auto-scheduling
 const { deadlineJob } = require('./schedulers/deadlineScheduler');
@@ -181,6 +182,7 @@ app.use((req, res, next) => {
     '/api/lists',
     '/api/game-reviews',
     '/api/user-games',
+    '/api/invites',
   ];
   
   // Exclude public routes that don't require auth
@@ -226,6 +228,7 @@ app.use('/api/feedback', feedbackLimiter, optionalAuth, feedbackRoutes); // Feed
 app.use('/api/webhooks', webhooksRoutes); // External service webhooks (Resend, etc.)
 app.use('/api/magic-auth', magicAuthRoutes); // Magic link validation (no Auth0 required)
 app.use('/api/availability-responses', availabilityResponseRoutes); // Availability form submission (magic token auth)
+app.use('/api/invites', inviteRoutes); // Public invite info endpoint (GET /info/:token -- no auth required)
 
 // Protected routes (require Auth0 token)
 // Apply write operation rate limiting only to POST/PUT/DELETE requests
@@ -258,6 +261,8 @@ app.use('/api', writeOperationLimiter, availabilityPromptRoutes);
 app.use('/api', adminMetricsRoutes);
 // Token analytics (requires Auth0 token)
 app.use('/api/tokens', verifyAuth0Token, tokenRoutes);
+// Group invites (authenticated endpoints: send, accept, decline, pending, etc.)
+app.use('/api/invites', writeOperationLimiter, verifyAuth0Token, inviteRoutes);
 
 // Health check
 app.get('/health', (req, res) => {

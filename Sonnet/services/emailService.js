@@ -305,6 +305,100 @@ Review suggestions: ${dashboardUrl}
   }
 
   // ============================================
+  // Group Invite Email Template
+  // ============================================
+
+  /**
+   * Generate email template for group invite notification
+   * Sent when a group owner/admin invites someone to join their group
+   * @param {Object} params - Template parameters
+   * @param {string} params.inviterName - Name of the person who sent the invite
+   * @param {string} params.groupName - Name of the group
+   * @param {number} params.memberCount - Current active member count
+   * @param {string} params.inviteUrl - URL to accept the invite (contains token)
+   * @returns {{html: string, text: string}} Email content
+   */
+  generateGroupInviteEmailTemplate({ inviterName, groupName, memberCount, inviteUrl }) {
+    const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background-color: #28a745; color: white; padding: 20px; text-align: center; border-radius: 5px 5px 0 0; }
+    .content { background-color: #f9fafb; padding: 30px; border-radius: 0 0 5px 5px; }
+    .button { display: inline-block; padding: 12px 24px; background-color: #28a745; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; }
+    .footer { text-align: center; color: #6B7280; font-size: 12px; margin-top: 30px; padding-top: 20px; border-top: 1px solid #E5E7EB; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>You're Invited!</h1>
+    </div>
+    <div class="content">
+      <p>Hey! <strong>${inviterName}</strong> invited you to join <strong>${groupName}</strong> on Next Game Night.</p>
+
+      <p>The group has ${memberCount} member${memberCount !== 1 ? 's' : ''}.</p>
+
+      <div style="text-align: center; margin: 30px 0;">
+        <a href="${inviteUrl}" class="button">View Invite</a>
+      </div>
+
+      <p>If you don't have an account yet, you'll be able to create one when you click the link above.</p>
+
+      <div class="footer">
+        <p>This is an automated notification from Next Game Night.</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+    `.trim();
+
+    const text = `
+You're Invited!
+
+Hey! ${inviterName} invited you to join ${groupName} on Next Game Night.
+
+The group has ${memberCount} member${memberCount !== 1 ? 's' : ''}.
+
+View invite: ${inviteUrl}
+
+If you don't have an account yet, you'll be able to create one when you click the link above.
+
+---
+This is an automated notification from Next Game Night.
+    `.trim();
+
+    return { html, text };
+  }
+
+  /**
+   * Send group invite notification email
+   * @param {string} recipientEmail - Email address of the invitee
+   * @param {Object} templateParams - Parameters for the email template
+   * @param {string} templateParams.inviterName - Name of the inviter
+   * @param {string} templateParams.groupName - Name of the group
+   * @param {number} templateParams.memberCount - Active member count
+   * @param {string} templateParams.inviteUrl - URL to accept the invite
+   * @returns {Promise<{success: boolean, id?: string, error?: string}>}
+   */
+  async sendGroupInviteNotification(recipientEmail, templateParams) {
+    const { html, text } = this.generateGroupInviteEmailTemplate(templateParams);
+
+    return this.send({
+      to: recipientEmail,
+      subject: `You're invited to join ${templateParams.groupName} on Next Game Night`,
+      html,
+      text,
+      groupName: templateParams.groupName,
+    });
+  }
+
+  // ============================================
   // Legacy methods (to be updated in Phase 7)
   // These maintain API compatibility with existing code
   // ============================================
