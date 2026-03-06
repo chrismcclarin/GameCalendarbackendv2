@@ -22,8 +22,8 @@ const validate = (req, res, next) => {
 const validateGroupCreate = [
   body('name')
     .trim()
-    .isLength({ min: 1, max: 50 })
-    .withMessage('Group name must be between 1 and 50 characters')
+    .isLength({ min: 1, max: 40 })
+    .withMessage('Group name must be between 1 and 40 characters')
     .notEmpty()
     .withMessage('Group name is required'),
   validate
@@ -33,8 +33,8 @@ const validateGroupUpdate = [
   body('name')
     .optional()
     .trim()
-    .isLength({ min: 1, max: 50 })
-    .withMessage('Group name must be between 1 and 50 characters'),
+    .isLength({ min: 1, max: 40 })
+    .withMessage('Group name must be between 1 and 40 characters'),
   body('profile_picture_url')
     .custom((value) => {
       // If value is falsy (null, undefined, empty string), allow it
