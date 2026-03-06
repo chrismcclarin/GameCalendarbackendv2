@@ -1,10 +1,77 @@
 // routes/feedback.js
 const express = require('express');
 const router = express.Router();
+const { Octokit } = require('@octokit/rest');
 const { validateFeedback } = require('../middleware/validators');
 const { verifyAuth0Token } = require('../middleware/auth0');
 const { Feedback } = require('../models');
 const emailService = require('../services/emailService');
+
+// Submit feedback as a GitHub Issue (with DB fallback)
+router.post('/github', verifyAuth0Token, async (req, res) => {
+  try {
+    const { category, text, pageUrl, userName, userEmail, label, userAgent } = req.body;
+
+    // Inline validation
+    if (!category || typeof category !== 'string' || !category.trim()) {
+      return res.status(400).json({ error: 'Category is required' });
+    }
+    if (!text || typeof text !== 'string' || text.trim().length < 10) {
+      return res.status(400).json({ error: 'Feedback must be at least 10 characters' });
+    }
+    if (!pageUrl || typeof pageUrl !== 'string' || !pageUrl.trim()) {
+      return res.status(400).json({ error: 'Page URL is required' });
+    }
+
+    const title = `[Feedback] ${category}: ${text.substring(0, 50)}${text.length > 50 ? '...' : ''}`;
+    const body = [
+      '## Feedback',
+      '',
+      text,
+      '',
+      '---',
+      `**Page:** ${pageUrl}`,
+      `**User:** ${userName || 'Unknown'}`,
+      `**Email:** ${userEmail || 'Not provided'}`,
+      `**Category:** ${category}`,
+      `**Submitted:** ${new Date().toISOString()}`,
+      '',
+      '<details>',
+      '<summary>Browser Info</summary>',
+      '',
+      userAgent || 'Not captured',
+      '',
+      '</details>',
+    ].join('\n');
+    const labels = [label || 'feedback:general'];
+
+    try {
+      const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+      await octokit.issues.create({
+        owner: process.env.GITHUB_REPO_OWNER,
+        repo: process.env.GITHUB_REPO_NAME,
+        title,
+        body,
+        labels,
+      });
+    } catch (err) {
+      console.error('GitHub Issue creation failed, falling back to DB:', err.message);
+      await Feedback.create({
+        type: 'feedback',
+        subject: title,
+        description: text,
+        user_email: userEmail || null,
+        user_id: req.auth?.sub || null,
+        page_context: pageUrl,
+      });
+    }
+
+    res.json({ message: 'Thanks! Your feedback has been submitted.' });
+  } catch (error) {
+    console.error('Error submitting feedback to GitHub:', error);
+    res.status(500).json({ error: 'Failed to submit feedback' });
+  }
+});
 
 // Submit bug report or suggestion
 router.post('/', validateFeedback, async (req, res) => {
