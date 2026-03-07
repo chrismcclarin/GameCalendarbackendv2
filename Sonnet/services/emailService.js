@@ -54,6 +54,10 @@ class EmailService {
         ? `${groupName} via NextGameNight`
         : 'NextGameNight';
 
+      // Ensure plain text fallback is always present for multipart emails
+      // Multipart (text + html) emails score better with spam filters
+      const plainText = text || (html ? html.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim() : '');
+
       const msg = {
         to: Array.isArray(to) ? to : [to],
         from: {
@@ -62,8 +66,15 @@ class EmailService {
         },
         subject,
         ...(html && { html }),
-        ...(text && { text }),
+        ...(plainText && { text: plainText }),
         ...(replyTo && { replyTo }),
+        // List-Unsubscribe headers signal legitimacy to email providers and reduce spam scoring
+        headers: {
+          'List-Unsubscribe': `<mailto:unsubscribe@nextgamenight.app>`,
+          'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
+        },
+        // SendGrid categories help with analytics and diagnosing which email types perform
+        categories: [emailType || 'notification'],
         // customArgs enables webhook event attribution back to the originating prompt
         // SendGrid passes these through on open/delivered/bounce/spamreport events
         ...(promptId && { customArgs: { prompt_id: String(promptId), email_type: emailType || 'notification' } }),
