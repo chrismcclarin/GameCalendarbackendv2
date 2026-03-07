@@ -375,6 +375,17 @@ const startServer = async () => {
         console.log('Deadline scheduler disabled (set ENABLE_SCHEDULER=true to enable)');
       }
 
+      // Start backup scheduler (weekly database backups, same guard as deadline scheduler)
+      if (process.env.NODE_ENV === 'production' || process.env.ENABLE_SCHEDULER === 'true') {
+        try {
+          const { backupJob } = require('./schedulers/backupScheduler');
+          backupJob.start();
+          console.log('Backup scheduler started (weekly, Sundays 2am UTC)');
+        } catch (err) {
+          console.error('Backup scheduler failed to start:', err.message);
+        }
+      }
+
       // Start BullMQ workers (only in production or if explicitly enabled)
       if (process.env.NODE_ENV === 'production' || process.env.ENABLE_WORKERS === 'true') {
         try {
