@@ -279,6 +279,22 @@ const validateAuth0UserId = (paramName = 'user_id') => [
   validate
 ];
 
+// RSVP validators
+const validateRsvpCreate = [
+  body('event_id')
+    .isUUID()
+    .withMessage('Event ID must be a valid UUID'),
+  body('status')
+    .isIn(['yes', 'no', 'maybe'])
+    .withMessage('Status must be one of: yes, no, maybe'),
+  body('note')
+    .optional({ nullable: true })
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage('Note must be less than 500 characters'),
+  validate
+];
+
 module.exports = {
   validate,
   validateGroupCreate,
@@ -291,5 +307,6 @@ module.exports = {
   validateFeedback,
   validateUUID,
   validateAuth0UserId,
+  validateRsvpCreate,
 };
 

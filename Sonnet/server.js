@@ -60,6 +60,7 @@ const adminMetricsRoutes = require('./routes/adminMetrics');
 const tokenRoutes = require('./routes/tokens');
 const inviteRoutes = require('./routes/invites');
 const friendshipRoutes = require('./routes/friendships');
+const rsvpRoutes = require('./routes/rsvp');
 
 // Scheduler for deadline-based auto-scheduling
 const { deadlineJob } = require('./schedulers/deadlineScheduler');
@@ -267,6 +268,8 @@ app.use('/api/tokens', verifyAuth0Token, tokenRoutes);
 app.use('/api/invites', writeOperationLimiter, verifyAuth0Token, inviteRoutes);
 // Friendships (social graph: friend requests, accept, decline, remove)
 app.use('/api/friendships', writeOperationLimiter, verifyAuth0Token, friendshipRoutes);
+// RSVP (event responses: yes/no/maybe with optional note)
+app.use('/api/rsvp', writeOperationLimiter, verifyAuth0Token, rsvpRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
