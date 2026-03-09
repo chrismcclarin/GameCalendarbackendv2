@@ -21,6 +21,7 @@ const EmailMetrics = require('./EmailMetrics');
 const Feedback = require('./Feedback');
 const Friendship = require('./Friendship');
 const GroupInvite = require('./GroupInvite');
+const EventRsvp = require('./EventRsvp');
 const sequelize = require('../config/database');
 
 
@@ -149,6 +150,13 @@ GroupInvite.belongsTo(Group, { foreignKey: 'group_id' });
 User.hasMany(GroupInvite, { as: 'SentInvites', foreignKey: 'invited_by', sourceKey: 'user_id' });
 GroupInvite.belongsTo(User, { as: 'Inviter', foreignKey: 'invited_by', targetKey: 'user_id' });
 
+// Event RSVPs (yes/no/maybe responses)
+Event.hasMany(EventRsvp, { foreignKey: 'event_id' });
+EventRsvp.belongsTo(Event, { foreignKey: 'event_id' });
+// Note: Uses sourceKey/targetKey because user_id is STRING (Auth0 ID), not UUID
+User.hasMany(EventRsvp, { foreignKey: 'user_id', sourceKey: 'user_id' });
+EventRsvp.belongsTo(User, { foreignKey: 'user_id', targetKey: 'user_id' });
+
 
 module.exports = {
   User,
@@ -170,5 +178,6 @@ module.exports = {
   Feedback,
   Friendship,
   GroupInvite,
+  EventRsvp,
   sequelize,
 };
