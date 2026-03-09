@@ -232,6 +232,7 @@ app.use('/api/webhooks', webhooksRoutes); // External service webhooks (Resend, 
 app.use('/api/magic-auth', magicAuthRoutes); // Magic link validation (no Auth0 required)
 app.use('/api/availability-responses', availabilityResponseRoutes); // Availability form submission (magic token auth)
 app.use('/api/invites', inviteRoutes); // Public invite info endpoint (GET /info/:token -- no auth required)
+app.use('/api/rsvp', writeOperationLimiter, rsvpRoutes); // RSVP: GET /respond is public; POST/GET/DELETE have per-route auth
 
 // Protected routes (require Auth0 token)
 // Apply write operation rate limiting only to POST/PUT/DELETE requests
@@ -268,8 +269,7 @@ app.use('/api/tokens', verifyAuth0Token, tokenRoutes);
 app.use('/api/invites', writeOperationLimiter, verifyAuth0Token, inviteRoutes);
 // Friendships (social graph: friend requests, accept, decline, remove)
 app.use('/api/friendships', writeOperationLimiter, verifyAuth0Token, friendshipRoutes);
-// RSVP (event responses: yes/no/maybe with optional note)
-app.use('/api/rsvp', writeOperationLimiter, verifyAuth0Token, rsvpRoutes);
+// RSVP routes moved to public section above (per-route auth inside rsvp.js)
 
 // Health check
 app.get('/health', (req, res) => {
