@@ -1,11 +1,12 @@
 // routes/events.js
 const express = require('express');
-const { Event, Game, User, Group, EventParticipation, UserGroup } = require('../models');
+const { Event, Game, User, Group, EventParticipation, UserGroup, EventRsvp } = require('../models');
 const { Op } = require('sequelize');
 const router = express.Router();
 const auth0Service = require('../services/auth0Service');
 const googleCalendarService = require('../services/googleCalendarService');
 const emailService = require('../services/emailService');
+const { generateRsvpUrl } = require('./rsvp');
 
 // Helper function to format event with custom participants
 const formatEventWithCustomParticipants = (event) => {
@@ -117,6 +118,32 @@ const getUserRoleInGroup = async (user_id, group_id) => {
 const isOwnerOrAdmin = async (user_id, group_id) => {
   const role = await getUserRoleInGroup(user_id, group_id);
   return role === 'owner' || role === 'admin';
+};
+
+// Helper: attach RSVP summary counts to an array of formatted events
+const attachRsvpSummaries = async (events) => {
+  const eventIds = events.map(e => e.id);
+  if (eventIds.length === 0) return events;
+
+  const rsvps = await EventRsvp.findAll({
+    where: { event_id: { [Op.in]: eventIds } },
+    attributes: ['event_id', 'status'],
+    raw: true,
+  });
+
+  // Build counts map: { event_id: { yes: N, maybe: N, no: N } }
+  const countsMap = {};
+  for (const r of rsvps) {
+    if (!countsMap[r.event_id]) countsMap[r.event_id] = { yes: 0, maybe: 0, no: 0 };
+    if (countsMap[r.event_id][r.status] !== undefined) {
+      countsMap[r.event_id][r.status]++;
+    }
+  }
+
+  return events.map(e => ({
+    ...e,
+    rsvp_summary: countsMap[e.id] || { yes: 0, maybe: 0, no: 0 },
+  }));
 };
 
 
@@ -233,7 +260,13 @@ router.get('/user/:user_id', async (req, res) => {
     });
     
     // Format all events with custom participants
-    const formattedEvents = events.map(event => formatEventWithCustomParticipants(event));
+    let formattedEvents = events.map(event => formatEventWithCustomParticipants(event));
+
+    // Optionally include RSVP summary counts
+    if (req.query.include_rsvp_summary) {
+      formattedEvents = await attachRsvpSummaries(formattedEvents);
+    }
+
     res.json(formattedEvents);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -267,7 +300,13 @@ router.get('/group/:group_id', async (req, res) => {
     });
     
     // Format all events with custom participants
-    const formattedEvents = events.map(event => formatEventWithCustomParticipants(event));
+    let formattedEvents = events.map(event => formatEventWithCustomParticipants(event));
+
+    // Optionally include RSVP summary counts
+    if (req.query.include_rsvp_summary) {
+      formattedEvents = await attachRsvpSummaries(formattedEvents);
+    }
+
     res.json(formattedEvents);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -434,30 +473,49 @@ router.post('/', validateEventCreate, async (req, res) => {
               minute: '2-digit',
               hour12: false
             });
-            
+
             // Build event URL (assuming event detail page exists)
             // Use event.id which is available after creation
-            const eventUrl = `${process.env.FRONTEND_URL || process.env.AUTH0_BASE_URL || 'http://localhost:3000'}/group/${group_id}/event/${event.id}`;
-            
-            const eventDataForEmail = {
-              gameName: game?.name || 'Game Night',
-              groupName: group.name,
-              startDate: start_date,
-              startTime: startTime,
-              durationMinutes: duration_minutes || 60,
-              location: null, // Can be added later if location field exists
-              comments: comments || null,
-              eventUrl: eventUrl
-            };
-            
-            // Send emails asynchronously - don't wait for completion
-            // This ensures event creation doesn't fail if emails fail
-            emailService.sendGameSessionNotificationToMultiple(recipients, eventDataForEmail)
-              .then(result => {
-                if (process.env.NODE_ENV === 'development' || result.failed > 0) {
-                  console.log(`Email notifications sent: ${result.successful}/${result.total} successful`);
-                  if (result.failed > 0) {
-                    console.error('Failed email recipients:', result.results.filter(r => !r.success).map(r => r.recipient));
+            const frontendUrl = process.env.FRONTEND_URL || process.env.AUTH0_BASE_URL || 'http://localhost:3000';
+            const eventUrl = `${frontendUrl}/group/${group_id}/event/${event.id}`;
+
+            // Send personalized emails per recipient with RSVP magic link URLs
+            // Each recipient gets unique HMAC-signed RSVP buttons
+            const emailPromises = recipients.map(recipient => {
+              const rsvpUrls = {
+                yesUrl: generateRsvpUrl(frontendUrl, event.id, recipient.user_id, 'yes'),
+                maybeUrl: generateRsvpUrl(frontendUrl, event.id, recipient.user_id, 'maybe'),
+                noUrl: generateRsvpUrl(frontendUrl, event.id, recipient.user_id, 'no'),
+              };
+
+              const eventDataForEmail = {
+                gameName: game?.name || 'Game Night',
+                groupName: group.name,
+                startDate: start_date,
+                startTime: startTime,
+                durationMinutes: duration_minutes || 60,
+                location: null,
+                comments: comments || null,
+                eventUrl: eventUrl,
+                rsvpUrls,
+              };
+
+              return emailService.sendGameSessionNotification(
+                recipient.email,
+                recipient.name,
+                eventDataForEmail
+              );
+            });
+
+            // Fire-and-forget: send all emails in parallel, don't block event creation
+            Promise.allSettled(emailPromises)
+              .then(results => {
+                const successful = results.filter(r => r.status === 'fulfilled' && r.value?.success).length;
+                const failed = results.length - successful;
+                if (process.env.NODE_ENV === 'development' || failed > 0) {
+                  console.log(`Email notifications sent: ${successful}/${results.length} successful`);
+                  if (failed > 0) {
+                    console.error('Failed email count:', failed);
                   }
                 }
               })
@@ -518,7 +576,10 @@ router.put('/:id', validateUUID('id'), validateEventUpdate, async (req, res) => 
       participants,
       custom_participants
     } = req.body;
-    
+
+    // Capture old start_date before update to detect date changes
+    const oldStartDate = event.start_date;
+
     await event.update({
       start_date,
       duration_minutes,
@@ -530,12 +591,12 @@ router.put('/:id', validateUUID('id'), validateEventUpdate, async (req, res) => 
       is_group_win,
       comments
     });
-    
+
     // Update participations if provided
     if (participants) {
       // Remove existing participations
       await EventParticipation.destroy({ where: { event_id: event.id } });
-      
+
       // Create new participations for group members (with user_id)
       if (participants.length > 0) {
         const participationData = participants
@@ -548,13 +609,13 @@ router.put('/:id', validateUUID('id'), validateEventUpdate, async (req, res) => 
             is_new_player: p.is_new_player || false,
             placement: p.placement
           }));
-        
+
         if (participationData.length > 0) {
           await EventParticipation.bulkCreate(participationData);
         }
       }
     }
-    
+
     // Fetch updated event
     const updatedEvent = await Event.findByPk(event.id, {
       include: [
@@ -567,10 +628,88 @@ router.put('/:id', validateUUID('id'), validateEventUpdate, async (req, res) => 
         }
       ]
     });
-    
+
     // Format event with custom participants
     const formattedEvent = formatEventWithCustomParticipants(updatedEvent);
-    
+
+    // Send date-change notification if start_date changed and event is in the future
+    const dateChanged = start_date && String(oldStartDate) !== String(start_date);
+    const isFutureEvent = start_date && new Date(start_date) > new Date();
+
+    if (dateChanged && isFutureEvent && emailService.isConfigured()) {
+      try {
+        // Find members who RSVPed yes or maybe
+        const rsvpMembers = await EventRsvp.findAll({
+          where: {
+            event_id: event.id,
+            status: { [Op.in]: ['yes', 'maybe'] },
+          },
+          include: [{
+            model: User,
+            attributes: ['id', 'user_id', 'username', 'email', 'email_notifications_enabled'],
+          }],
+        });
+
+        const dateChangeRecipients = rsvpMembers
+          .filter(r => r.User && r.User.email &&
+            r.User.email_notifications_enabled !== false &&
+            !r.User.email.includes('@auth0.local') &&
+            !r.User.email.includes('@auth0'))
+          .map(r => ({
+            email: r.User.email,
+            name: r.User.username,
+            user_id: r.User.user_id,
+          }));
+
+        if (dateChangeRecipients.length > 0) {
+          const frontendUrl = process.env.FRONTEND_URL || process.env.AUTH0_BASE_URL || 'http://localhost:3000';
+          const eventUrl = `${frontendUrl}/group/${event.group_id}/event/${event.id}`;
+          const game = updatedEvent.Game || await Game.findByPk(event.game_id, { attributes: ['name'] });
+          const group = await Group.findByPk(event.group_id, { attributes: ['name'] });
+          const newEventDate = new Date(start_date);
+          const newTime = newEventDate.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', hour12: false,
+          });
+
+          const emailPromises = dateChangeRecipients.map(recipient => {
+            const rsvpUrls = {
+              yesUrl: generateRsvpUrl(frontendUrl, event.id, recipient.user_id, 'yes'),
+              maybeUrl: generateRsvpUrl(frontendUrl, event.id, recipient.user_id, 'maybe'),
+              noUrl: generateRsvpUrl(frontendUrl, event.id, recipient.user_id, 'no'),
+            };
+
+            const { html, text } = emailService.generateDateChangeEmailTemplate({
+              gameName: game?.name || 'Game Session',
+              groupName: group?.name || '',
+              newDate: start_date,
+              newTime,
+              durationMinutes: duration_minutes || event.duration_minutes || 60,
+              eventUrl,
+              recipientName: recipient.name,
+              rsvpUrls,
+            });
+
+            return emailService.send({
+              to: recipient.email,
+              subject: `Date Changed: ${game?.name || 'Game Session'} - ${group?.name || ''}`,
+              html,
+              text,
+              groupName: group?.name,
+            });
+          });
+
+          Promise.allSettled(emailPromises)
+            .then(results => {
+              const successful = results.filter(r => r.status === 'fulfilled' && r.value?.success).length;
+              console.log(`Date-change notifications sent: ${successful}/${results.length}`);
+            })
+            .catch(err => console.error('Date-change notification error (non-fatal):', err.message));
+        }
+      } catch (dateChangeError) {
+        console.error('Error sending date-change notifications (non-fatal):', dateChangeError.message);
+      }
+    }
+
     res.json(formattedEvent);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -597,13 +736,77 @@ router.delete('/:id', async (req, res) => {
     if (!hasPermission) {
       return res.status(403).json({ error: 'Only group owners and admins can delete events' });
     }
-    
-    // Delete participations first
+
+    // Send cancellation email to members who RSVPed yes or maybe (before deleting data)
+    try {
+      if (emailService.isConfigured()) {
+        const rsvpMembers = await EventRsvp.findAll({
+          where: {
+            event_id: event.id,
+            status: { [Op.in]: ['yes', 'maybe'] },
+          },
+          include: [{
+            model: User,
+            attributes: ['id', 'user_id', 'username', 'email', 'email_notifications_enabled'],
+          }],
+        });
+
+        const cancellationRecipients = rsvpMembers
+          .filter(r => r.User && r.User.email &&
+            r.User.email_notifications_enabled !== false &&
+            !r.User.email.includes('@auth0.local') &&
+            !r.User.email.includes('@auth0'))
+          .map(r => ({
+            email: r.User.email,
+            name: r.User.username,
+          }));
+
+        if (cancellationRecipients.length > 0) {
+          const frontendUrl = process.env.FRONTEND_URL || process.env.AUTH0_BASE_URL || 'http://localhost:3000';
+          const game = await Game.findByPk(event.game_id, { attributes: ['name'] });
+          const group = await Group.findByPk(event.group_id, { attributes: ['id', 'name'] });
+          const groupUrl = `${frontendUrl}/groupHomePage?id=${group?.id || event.group_id}`;
+
+          const emailPromises = cancellationRecipients.map(recipient => {
+            const { html, text } = emailService.generateCancellationEmailTemplate({
+              gameName: game?.name || 'Game Session',
+              groupName: group?.name || '',
+              eventDate: event.start_date,
+              recipientName: recipient.name,
+              groupUrl,
+            });
+
+            return emailService.send({
+              to: recipient.email,
+              subject: `Cancelled: ${game?.name || 'Game Session'} - ${group?.name || ''}`,
+              html,
+              text,
+              groupName: group?.name,
+            });
+          });
+
+          // Fire-and-forget: don't block deletion on email sends
+          Promise.allSettled(emailPromises)
+            .then(results => {
+              const successful = results.filter(r => r.status === 'fulfilled' && r.value?.success).length;
+              console.log(`Cancellation notifications sent: ${successful}/${results.length}`);
+            })
+            .catch(err => console.error('Cancellation notification error (non-fatal):', err.message));
+        }
+      }
+    } catch (cancelEmailError) {
+      console.error('Error sending cancellation notifications (non-fatal):', cancelEmailError.message);
+    }
+
+    // Delete RSVPs for this event
+    await EventRsvp.destroy({ where: { event_id: event.id } });
+
+    // Delete participations
     await EventParticipation.destroy({ where: { event_id: event.id } });
-    
+
     // Delete event
     await event.destroy();
-    
+
     res.json({ message: 'Event deleted successfully' });
   } catch (error) {
     res.status(500).json({ error: error.message });
