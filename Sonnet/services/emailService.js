@@ -419,10 +419,38 @@ This is an automated notification from Next Game Night.
    * @deprecated Use React Email templates instead (Phase 2, Plan 2)
    */
   generateGameSessionEmailTemplate(eventData) {
-    const { gameName, groupName, startDate, startTime, durationMinutes, location, comments, eventUrl, recipientName } = eventData;
+    const { gameName, groupName, startDate, startTime, durationMinutes, location, comments, eventUrl, recipientName, rsvpUrls } = eventData;
 
     const formattedDate = this.formatEventDate(startDate);
     const endTime = this.calculateEndTime(startTime, durationMinutes);
+
+    // RSVP buttons HTML (table-based layout for email compatibility)
+    const rsvpButtonsHtml = rsvpUrls ? `
+      <div style="text-align: center; margin: 20px 0 10px;">
+        <p style="font-size: 16px; font-weight: bold; color: #374151; margin-bottom: 12px;">Are you going?</p>
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0" align="center">
+          <tr>
+            <td style="padding: 0 6px;">
+              <a href="${rsvpUrls.yesUrl}" style="display: inline-block; padding: 12px 24px; background-color: #22c55e; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 14px;">Yes</a>
+            </td>
+            <td style="padding: 0 6px;">
+              <a href="${rsvpUrls.maybeUrl}" style="display: inline-block; padding: 12px 24px; background-color: #eab308; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 14px;">Maybe</a>
+            </td>
+            <td style="padding: 0 6px;">
+              <a href="${rsvpUrls.noUrl}" style="display: inline-block; padding: 12px 24px; background-color: #ef4444; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 14px;">No</a>
+            </td>
+          </tr>
+        </table>
+      </div>
+    ` : '';
+
+    // RSVP plain text links
+    const rsvpPlainText = rsvpUrls ? `
+RSVP:
+- Yes: ${rsvpUrls.yesUrl}
+- Maybe: ${rsvpUrls.maybeUrl}
+- No: ${rsvpUrls.noUrl}
+` : '';
 
     const html = `
 <!DOCTYPE html>
@@ -451,6 +479,8 @@ This is an automated notification from Next Game Night.
       <p>Hi ${recipientName || 'there'},</p>
 
       <p>A new game session has been scheduled for your group <strong>${groupName}</strong>.</p>
+
+      ${rsvpButtonsHtml}
 
       <div class="event-details">
         <div class="event-detail-row">
@@ -507,7 +537,7 @@ New Game Session Scheduled!
 Hi ${recipientName || 'there'},
 
 A new game session has been scheduled for your group "${groupName}".
-
+${rsvpPlainText}
 Event Details:
 - Game: ${gameName}
 - Date: ${formattedDate}
@@ -565,6 +595,240 @@ You can manage your notification preferences in your profile: ${this.frontendUrl
       text,
       groupName: eventData.groupName
     });
+  }
+
+  // ============================================
+  // Date Change Email Template
+  // ============================================
+
+  /**
+   * Generate email template for event date change notification
+   * Sent to members who RSVPed (yes/maybe) when the event date changes
+   * @param {Object} params - Template parameters
+   * @param {string} params.gameName - Name of the game
+   * @param {string} params.groupName - Name of the group
+   * @param {string} params.newDate - New event date
+   * @param {string} params.newTime - New event start time
+   * @param {number} params.durationMinutes - Event duration
+   * @param {string} params.eventUrl - URL to the event detail page
+   * @param {string} params.recipientName - Recipient display name
+   * @param {Object} [params.rsvpUrls] - Optional RSVP button URLs { yesUrl, maybeUrl, noUrl }
+   * @returns {{html: string, text: string}} Email content
+   */
+  generateDateChangeEmailTemplate({ gameName, groupName, newDate, newTime, durationMinutes, eventUrl, recipientName, rsvpUrls }) {
+    const formattedDate = this.formatEventDate(newDate);
+    const endTime = this.calculateEndTime(newTime, durationMinutes);
+
+    // RSVP buttons HTML (reusable, same as game session template)
+    const rsvpButtonsHtml = rsvpUrls ? `
+      <div style="text-align: center; margin: 20px 0 10px;">
+        <p style="font-size: 16px; font-weight: bold; color: #374151; margin-bottom: 12px;">Are you going?</p>
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0" align="center">
+          <tr>
+            <td style="padding: 0 6px;">
+              <a href="${rsvpUrls.yesUrl}" style="display: inline-block; padding: 12px 24px; background-color: #22c55e; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 14px;">Yes</a>
+            </td>
+            <td style="padding: 0 6px;">
+              <a href="${rsvpUrls.maybeUrl}" style="display: inline-block; padding: 12px 24px; background-color: #eab308; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 14px;">Maybe</a>
+            </td>
+            <td style="padding: 0 6px;">
+              <a href="${rsvpUrls.noUrl}" style="display: inline-block; padding: 12px 24px; background-color: #ef4444; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 14px;">No</a>
+            </td>
+          </tr>
+        </table>
+      </div>
+    ` : '';
+
+    const rsvpPlainText = rsvpUrls ? `
+RSVP (re-confirm your attendance):
+- Yes: ${rsvpUrls.yesUrl}
+- Maybe: ${rsvpUrls.maybeUrl}
+- No: ${rsvpUrls.noUrl}
+` : '';
+
+    const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background-color: #F59E0B; color: white; padding: 20px; text-align: center; border-radius: 5px 5px 0 0; }
+    .content { background-color: #f9fafb; padding: 30px; border-radius: 0 0 5px 5px; }
+    .event-details { background-color: white; padding: 20px; margin: 20px 0; border-radius: 5px; border-left: 4px solid #F59E0B; }
+    .event-detail-row { margin: 10px 0; }
+    .event-detail-label { font-weight: bold; color: #6B7280; }
+    .event-detail-value { color: #111827; margin-left: 10px; }
+    .button { display: inline-block; padding: 12px 24px; background-color: #F59E0B; color: white; text-decoration: none; border-radius: 5px; margin: 20px 0; }
+    .footer { text-align: center; color: #6B7280; font-size: 12px; margin-top: 30px; padding-top: 20px; border-top: 1px solid #E5E7EB; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Date Changed</h1>
+    </div>
+    <div class="content">
+      <p>Hi ${recipientName || 'there'},</p>
+
+      <p>The date for <strong>${gameName}</strong> in <strong>${groupName}</strong> has been updated.</p>
+
+      ${rsvpButtonsHtml}
+
+      <div class="event-details">
+        <div class="event-detail-row">
+          <span class="event-detail-label">Game:</span>
+          <span class="event-detail-value">${gameName}</span>
+        </div>
+        <div class="event-detail-row">
+          <span class="event-detail-label">New Date:</span>
+          <span class="event-detail-value" style="color: #D97706; font-weight: bold;">${formattedDate}</span>
+        </div>
+        <div class="event-detail-row">
+          <span class="event-detail-label">Time:</span>
+          <span class="event-detail-value">${newTime} - ${endTime}</span>
+        </div>
+        ${durationMinutes ? `
+        <div class="event-detail-row">
+          <span class="event-detail-label">Duration:</span>
+          <span class="event-detail-value">${durationMinutes} minutes</span>
+        </div>
+        ` : ''}
+      </div>
+
+      <div style="text-align: center;">
+        <a href="${eventUrl}" class="button">View Event Details</a>
+      </div>
+
+      <div class="footer">
+        <p>This is an automated notification from PeriodicTableTop.</p>
+        <p>You can manage your notification preferences in your <a href="${this.frontendUrl}/userProfile">profile settings</a>.</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+    `.trim();
+
+    const text = `
+Date Changed
+
+Hi ${recipientName || 'there'},
+
+The date for "${gameName}" in "${groupName}" has been updated.
+${rsvpPlainText}
+New Event Details:
+- Game: ${gameName}
+- New Date: ${formattedDate}
+- Time: ${newTime} - ${endTime}
+${durationMinutes ? `- Duration: ${durationMinutes} minutes\n` : ''}
+
+View event details: ${eventUrl}
+
+---
+This is an automated notification from PeriodicTableTop.
+You can manage your notification preferences in your profile: ${this.frontendUrl}/userProfile
+    `.trim();
+
+    return { html, text };
+  }
+
+  // ============================================
+  // Event Cancellation Email Template
+  // ============================================
+
+  /**
+   * Generate email template for event cancellation notification
+   * Sent to members who RSVPed (yes/maybe) when an event is deleted
+   * @param {Object} params - Template parameters
+   * @param {string} params.gameName - Name of the game
+   * @param {string} params.groupName - Name of the group
+   * @param {string} params.eventDate - Original event date
+   * @param {string} params.recipientName - Recipient display name
+   * @param {string} params.groupUrl - URL to the group page
+   * @returns {{html: string, text: string}} Email content
+   */
+  generateCancellationEmailTemplate({ gameName, groupName, eventDate, recipientName, groupUrl }) {
+    const formattedDate = this.formatEventDate(eventDate);
+
+    const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background-color: #EF4444; color: white; padding: 20px; text-align: center; border-radius: 5px 5px 0 0; }
+    .content { background-color: #f9fafb; padding: 30px; border-radius: 0 0 5px 5px; }
+    .event-details { background-color: white; padding: 20px; margin: 20px 0; border-radius: 5px; border-left: 4px solid #EF4444; }
+    .event-detail-row { margin: 10px 0; }
+    .event-detail-label { font-weight: bold; color: #6B7280; }
+    .event-detail-value { color: #111827; margin-left: 10px; }
+    .button { display: inline-block; padding: 12px 24px; background-color: #4F46E5; color: white; text-decoration: none; border-radius: 5px; margin: 20px 0; }
+    .footer { text-align: center; color: #6B7280; font-size: 12px; margin-top: 30px; padding-top: 20px; border-top: 1px solid #E5E7EB; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Event Cancelled</h1>
+    </div>
+    <div class="content">
+      <p>Hi ${recipientName || 'there'},</p>
+
+      <p><strong>${gameName}</strong> scheduled for <strong>${formattedDate}</strong> has been cancelled.</p>
+
+      <div class="event-details">
+        <div class="event-detail-row">
+          <span class="event-detail-label">Game:</span>
+          <span class="event-detail-value" style="text-decoration: line-through;">${gameName}</span>
+        </div>
+        <div class="event-detail-row">
+          <span class="event-detail-label">Date:</span>
+          <span class="event-detail-value" style="text-decoration: line-through;">${formattedDate}</span>
+        </div>
+        <div class="event-detail-row">
+          <span class="event-detail-label">Group:</span>
+          <span class="event-detail-value">${groupName}</span>
+        </div>
+      </div>
+
+      <div style="text-align: center;">
+        <a href="${groupUrl}" class="button">Go to Group</a>
+      </div>
+
+      <div class="footer">
+        <p>This is an automated notification from PeriodicTableTop.</p>
+        <p>You can manage your notification preferences in your <a href="${this.frontendUrl}/userProfile">profile settings</a>.</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+    `.trim();
+
+    const text = `
+Event Cancelled
+
+Hi ${recipientName || 'there'},
+
+"${gameName}" scheduled for ${formattedDate} has been cancelled.
+
+Event Details:
+- Game: ${gameName}
+- Date: ${formattedDate}
+- Group: ${groupName}
+
+Go to group: ${groupUrl}
+
+---
+This is an automated notification from PeriodicTableTop.
+You can manage your notification preferences in your profile: ${this.frontendUrl}/userProfile
+    `.trim();
+
+    return { html, text };
   }
 }
 
