@@ -295,6 +295,30 @@ const validateRsvpCreate = [
   validate
 ];
 
+// Ballot validators
+const validateBallotOptions = [
+  body('options')
+    .isArray({ min: 2, max: 10 })
+    .withMessage('Ballot must have between 2 and 10 options'),
+  body('options.*.game_name')
+    .isString()
+    .trim()
+    .isLength({ min: 1, max: 200 })
+    .withMessage('Each option must have a game name between 1 and 200 characters'),
+  body('options.*.game_id')
+    .optional({ nullable: true })
+    .isUUID()
+    .withMessage('Game ID must be a valid UUID when provided'),
+  validate
+];
+
+const validateBallotVote = [
+  body('option_id')
+    .isUUID()
+    .withMessage('Option ID must be a valid UUID'),
+  validate
+];
+
 module.exports = {
   validate,
   validateGroupCreate,
@@ -308,5 +332,7 @@ module.exports = {
   validateUUID,
   validateAuth0UserId,
   validateRsvpCreate,
+  validateBallotOptions,
+  validateBallotVote,
 };
 
