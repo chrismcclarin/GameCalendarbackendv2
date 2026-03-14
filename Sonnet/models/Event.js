@@ -58,6 +58,15 @@ const Event = sequelize.define('Event', {
     type: DataTypes.ENUM('scheduled', 'in_progress', 'completed', 'cancelled'),
     defaultValue: 'completed',
   },
+  rsvp_deadline: {
+    type: DataTypes.DATE,
+    allowNull: true, // required only when ballot exists, enforced at API level
+  },
+  ballot_status: {
+    type: DataTypes.ENUM('open', 'closed'),
+    allowNull: true,
+    defaultValue: null, // null = no ballot on this event
+  },
 }, {
   timestamps: true,
   indexes: [
