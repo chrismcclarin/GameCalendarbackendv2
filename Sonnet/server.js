@@ -232,7 +232,7 @@ app.use('/api/feedback', feedbackLimiter, optionalAuth, feedbackRoutes); // Feed
 app.use('/api/webhooks', webhooksRoutes); // External service webhooks (Resend, etc.)
 app.use('/api/magic-auth', magicAuthRoutes); // Magic link validation (no Auth0 required)
 app.use('/api/availability-responses', availabilityResponseRoutes); // Availability form submission (magic token auth)
-app.use('/api/invites', inviteRoutes); // Public invite info endpoint (GET /info/:token -- no auth required)
+// Public invite info endpoint handled by conditional auth below
 app.use('/api/rsvp', writeOperationLimiter, rsvpRoutes); // RSVP: GET /respond is public; POST/GET/DELETE have per-route auth
 
 // Protected routes (require Auth0 token)
@@ -266,8 +266,12 @@ app.use('/api', writeOperationLimiter, availabilityPromptRoutes);
 app.use('/api', adminMetricsRoutes);
 // Token analytics (requires Auth0 token)
 app.use('/api/tokens', verifyAuth0Token, tokenRoutes);
-// Group invites (authenticated endpoints: send, accept, decline, pending, etc.)
-app.use('/api/invites', writeOperationLimiter, verifyAuth0Token, inviteRoutes);
+// Group invites: GET /info/:token is public, all other endpoints require auth
+const conditionalInviteAuth = (req, res, next) => {
+  if (req.method === 'GET' && req.path.match(/^\/info\//)) return next();
+  return verifyAuth0Token(req, res, next);
+};
+app.use('/api/invites', writeOperationLimiter, conditionalInviteAuth, inviteRoutes);
 // Friendships (social graph: friend requests, accept, decline, remove)
 app.use('/api/friendships', writeOperationLimiter, verifyAuth0Token, friendshipRoutes);
 // Ballot routes (game voting: ballot CRUD, vote toggle, auto-close)

@@ -197,6 +197,7 @@ router.get('/:eventId', async (req, res) => {
             game_name: opt.game_name,
             display_order: opt.display_order,
             vote_count: (opt.EventBallotVotes || []).length,
+            user_voted: (opt.EventBallotVotes || []).some(v => v.user_id === auth0UserId),
           })),
         winner,
         needs_tie_break: needsTieBreak || (persistedNeedsTieBreak && !persistedNeedsFallbackPick),
@@ -241,10 +242,10 @@ router.post('/:eventId/options', validateBallotOptions, async (req, res) => {
       return res.status(404).json({ error: 'Event not found' });
     }
 
-    // Verify user is organizer (owner/admin)
-    const organizer = await isOwnerOrAdmin(auth0UserId, event.group_id);
-    if (!organizer) {
-      return res.status(403).json({ error: 'Only group owners and admins can create a ballot' });
+    // Verify user is an active member of the group
+    const isMember = await verifyUserInGroup(auth0UserId, event.group_id);
+    if (!isMember) {
+      return res.status(403).json({ error: 'You must be an active member of this group to create a ballot' });
     }
 
     // Require rsvp_deadline
@@ -306,10 +307,10 @@ router.put('/:eventId/options', validateBallotOptions, async (req, res) => {
       return res.status(400).json({ error: 'Cannot update options on a closed ballot' });
     }
 
-    // Verify user is organizer (owner/admin)
-    const organizer = await isOwnerOrAdmin(auth0UserId, event.group_id);
-    if (!organizer) {
-      return res.status(403).json({ error: 'Only group owners and admins can update ballot options' });
+    // Verify user is an active member of the group
+    const isMember = await verifyUserInGroup(auth0UserId, event.group_id);
+    if (!isMember) {
+      return res.status(403).json({ error: 'You must be an active member of this group to update ballot options' });
     }
 
     // Delete all existing options (CASCADE deletes votes on removed options)

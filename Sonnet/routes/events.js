@@ -314,6 +314,31 @@ router.get('/group/:group_id', async (req, res) => {
 });
 
 
+// Get a single event by ID (must come after /user/ and /group/ routes)
+router.get('/:event_id', async (req, res) => {
+  try {
+    const event = await Event.findByPk(req.params.event_id, {
+      include: [
+        { model: Game, attributes: ['name', 'image_url', 'theme'] },
+        { model: User, as: 'Winner', attributes: ['id', 'username'] },
+        { model: User, as: 'PickedBy', attributes: ['id', 'username'] },
+        {
+          model: EventParticipation,
+          include: [{ model: User, attributes: ['id', 'username'] }]
+        }
+      ]
+    });
+
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    res.json(formatEventWithCustomParticipants(event));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Create new event
 router.post('/', validateEventCreate, async (req, res) => {
   try {
@@ -330,7 +355,8 @@ router.post('/', validateEventCreate, async (req, res) => {
       comments,
       participants, // Array of { user_id, score, faction, is_new_player, placement }
       custom_participants, // Array of { username, score, faction, is_new_player, placement }
-      timezone // User's timezone (e.g., 'America/Los_Angeles')
+      timezone, // User's timezone (e.g., 'America/Los_Angeles')
+      rsvp_deadline // ISO date string for RSVP/ballot close
     } = req.body;
     
     const event = await Event.create({
@@ -345,7 +371,9 @@ router.post('/', validateEventCreate, async (req, res) => {
       custom_participants: custom_participants || [],
       is_group_win,
       comments,
-      status: 'completed'
+      status: 'completed',
+      rsvp_deadline: rsvp_deadline || null,
+      ballot_status: null
     });
     
     // Create participations for group members (with user_id)
@@ -574,7 +602,8 @@ router.put('/:id', validateUUID('id'), validateEventUpdate, async (req, res) => 
       is_group_win,
       comments,
       participants,
-      custom_participants
+      custom_participants,
+      rsvp_deadline
     } = req.body;
 
     // Capture old start_date before update to detect date changes
@@ -589,7 +618,8 @@ router.put('/:id', validateUUID('id'), validateEventUpdate, async (req, res) => 
       picked_by_name: picked_by_name || null,
       custom_participants: custom_participants || [],
       is_group_win,
-      comments
+      comments,
+      rsvp_deadline: rsvp_deadline || null
     });
 
     // Update participations if provided

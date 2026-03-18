@@ -164,8 +164,12 @@ const validateEventUpdate = [
     .isUUID()
     .withMessage('Group ID must be a valid UUID'),
   body('game_id')
-    .optional()
-    .isUUID()
+    .optional({ nullable: true })
+    .custom((value) => {
+      if (value === null || value === undefined || value === '') return true;
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      return uuidRegex.test(value);
+    })
     .withMessage('Game ID must be a valid UUID'),
   body('start_date')
     .optional()
