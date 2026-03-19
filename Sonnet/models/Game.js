@@ -34,6 +34,10 @@ const Game = sequelize.define('Game', {
     type: DataTypes.INTEGER,
     allowNull: true,
   },
+  weight: {
+    type: DataTypes.DECIMAL(4, 2),
+    allowNull: true, // BGG average weight/complexity (scale 1.0 to 5.0)
+  },
   description: {
     type: DataTypes.TEXT,
     allowNull: true,

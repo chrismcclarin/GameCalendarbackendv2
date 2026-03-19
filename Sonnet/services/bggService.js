@@ -50,15 +50,16 @@ class BGGService {
         response = await axios.get(`${this.baseURL}/thing`, {
           params: {
             id: bggId,
-            type: gameType
+            type: gameType,
+            stats: 1
           },
           headers: this.getHeaders(),
           timeout: 15000,
           maxRedirects: 5
         });
-        
+
         parsedResult = await this.parser.parseStringPromise(response.data);
-        
+
         // Check if we got valid data
         if (!parsedResult.items || !parsedResult.items.item || parsedResult.items.item.length === 0) {
           // No items found with this type, try the other type if we tried boardgame first
@@ -66,7 +67,8 @@ class BGGService {
             response = await axios.get(`${this.baseURL}/thing`, {
               params: {
                 id: bggId,
-                type: 'boardgameexpansion'
+                type: 'boardgameexpansion',
+                stats: 1
               },
               headers: this.getHeaders(),
               timeout: 15000,
@@ -82,7 +84,8 @@ class BGGService {
             response = await axios.get(`${this.baseURL}/thing`, {
               params: {
                 id: bggId,
-                type: 'boardgameexpansion'
+                type: 'boardgameexpansion',
+                stats: 1
               },
               headers: this.getHeaders(),
               timeout: 15000,
@@ -104,6 +107,20 @@ class BGGService {
       
       const item = Array.isArray(parsedResult.items.item) ? parsedResult.items.item[0] : parsedResult.items.item;
 
+      // Extract weight (complexity) from BGG statistics
+      // Path: item.statistics[0].ratings[0].averageweight[0].$.value
+      let weight = null;
+      try {
+        const rawWeight = item?.statistics?.[0]?.ratings?.[0]?.averageweight?.[0]?.$?.value;
+        if (rawWeight) {
+          const parsed = parseFloat(rawWeight);
+          if (!isNaN(parsed) && parsed > 0) {
+            weight = parsed;
+          }
+        }
+      } catch (e) {
+        // Weight extraction failed -- not critical, continue without it
+      }
 
       return {
         name: this.extractValue(item.name),
@@ -114,6 +131,7 @@ class BGGService {
         description: this.extractValue(item.description) || null,
         image_url: this.extractValue(item.image) || null,
         thumbnail_url: this.extractValue(item.thumbnail) || null,
+        weight,
       };
     } catch (error) {
       throw new Error(`Failed to fetch game from BGG: ${error.message}`);
