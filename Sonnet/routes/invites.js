@@ -75,11 +75,11 @@ router.post(
       }
 
       const { email, group_id } = req.body;
-      const inviterUserId = req.user.user_id;
+      const userId = req.user.user_id;
       const normalizedEmail = email.toLowerCase();
 
       // Permission check: Only owner or admin can invite
-      const hasPermission = await isOwnerOrAdmin(inviterUserId, group_id);
+      const hasPermission = await isOwnerOrAdmin(userId, group_id);
       if (!hasPermission) {
         return res.status(403).json({ error: 'Only group owners and admins can send invites' });
       }
@@ -132,7 +132,7 @@ router.post(
       const invite = await GroupInvite.create({
         group_id,
         invited_email: normalizedEmail,
-        invited_by: inviterUserId,
+        invited_by: userId,
         token,
         status: 'pending',
       });
@@ -164,7 +164,7 @@ router.post(
       if (emailService.isConfigured()) {
         try {
           // Get inviter info for the email
-          const inviter = await User.findOne({ where: { user_id: inviterUserId } });
+          const inviter = await User.findOne({ where: { user_id: userId } });
           const inviterName = inviter ? inviter.username : 'Someone';
 
           // Count active group members

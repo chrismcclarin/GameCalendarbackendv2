@@ -61,7 +61,6 @@ const generateGoogleAuthUrl = async (user_id, email = null, username = null, fro
   
   // Generate authorization URL
   const scopes = [
-    'https://www.googleapis.com/auth/calendar',
     'https://www.googleapis.com/auth/calendar.events'
   ];
   
@@ -89,23 +88,23 @@ const generateGoogleAuthUrl = async (user_id, email = null, username = null, fro
 router.get('/google/url', async (req, res) => {
   try {
     // Use verified user_id from token
-    const user_id = req.user?.user_id;
-    if (!user_id) {
+    const userId = req.user?.user_id;
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
-    
+
     // Get user info from token (preferred) or query params (fallback for backwards compatibility)
     const email = req.user?.email || req.query.email || null;
     const username = req.user?.name || req.user?.nickname || req.query.username || null;
-    
+
     // Get frontend URL from request origin, query param, or environment variable
     // This ensures the callback redirects to the correct frontend URL
-    const frontendUrl = req.query.frontend_url || 
+    const frontendUrl = req.query.frontend_url ||
                        (req.headers.origin ? req.headers.origin.replace(/\/$/, '') : null) ||
                        process.env.FRONTEND_URL ||
                        'http://localhost:3000';
-    
-    const authUrl = await generateGoogleAuthUrl(user_id, email, username, frontendUrl);
+
+    const authUrl = await generateGoogleAuthUrl(userId, email, username, frontendUrl);
     
     // Return URL as JSON
     res.json({ authUrl });
@@ -119,14 +118,14 @@ router.get('/google/url', async (req, res) => {
 router.get('/google', async (req, res) => {
   try {
     // Use verified user_id from token
-    const user_id = req.user?.user_id;
-    if (!user_id) {
+    const userId = req.user?.user_id;
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
-    
+
     const { email, username } = req.query; // Optional, for user creation
 
-    const authUrl = await generateGoogleAuthUrl(user_id, email, username);
+    const authUrl = await generateGoogleAuthUrl(userId, email, username);
 
     // Redirect to Google
     res.redirect(authUrl);
@@ -239,12 +238,12 @@ router.get('/google/callback', async (req, res) => {
 router.post('/google/disconnect', async (req, res) => {
   try {
     // Use verified user_id from token
-    const user_id = req.user?.user_id;
-    if (!user_id) {
+    const userId = req.user?.user_id;
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    const user = await User.findOne({ where: { user_id } });
+    const user = await User.findOne({ where: { user_id: userId } });
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -267,19 +266,19 @@ router.post('/google/disconnect', async (req, res) => {
 router.get('/google/status/:user_id', async (req, res) => {
   try {
     // Use verified user_id from token
-    const verified_user_id = req.user?.user_id;
-    if (!verified_user_id) {
+    const userId = req.user?.user_id;
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
-    
+
     // Verify that the requested user_id matches the authenticated user
-    if (req.params.user_id !== verified_user_id) {
+    if (req.params.user_id !== userId) {
       return res.status(403).json({ error: 'Forbidden: Cannot access other users\' calendar status' });
     }
-    
+
     // Find user (don't auto-create, just return status)
     const user = await User.findOne({
-      where: { user_id: verified_user_id },
+      where: { user_id: userId },
       attributes: ['google_calendar_enabled', 'google_calendar_token']
     });
 
@@ -304,12 +303,12 @@ router.get('/google/status/:user_id', async (req, res) => {
 router.post('/google/refresh', async (req, res) => {
   try {
     // Use verified user_id from token
-    const user_id = req.user?.user_id;
-    if (!user_id) {
+    const userId = req.user?.user_id;
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    const user = await User.findOne({ where: { user_id } });
+    const user = await User.findOne({ where: { user_id: userId } });
     if (!user || !user.google_calendar_refresh_token) {
       return res.status(404).json({ error: 'User not found or no refresh token available' });
     }

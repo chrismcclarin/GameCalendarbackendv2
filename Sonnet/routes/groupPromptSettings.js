@@ -29,9 +29,9 @@ const generateTemplateName = async (scheduleData, game_id = null) => {
 router.get('/:group_id/prompt-settings', async (req, res) => {
   try {
     const { group_id } = req.params;
-    const user_id = req.user?.user_id;
+    const userId = req.user?.user_id;
 
-    if (!user_id) {
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
@@ -43,7 +43,7 @@ router.get('/:group_id/prompt-settings', async (req, res) => {
     }
 
     // Verify user is a group member
-    const isMember = await isActiveMember(user_id, group_id);
+    const isMember = await isActiveMember(userId, group_id);
     if (!isMember) {
       return res.status(403).json({ error: 'You must be a group member to view prompt settings' });
     }
@@ -127,9 +127,9 @@ router.get('/:group_id/prompt-settings', async (req, res) => {
 router.post('/:group_id/prompt-settings/schedules', async (req, res) => {
   try {
     const { group_id } = req.params;
-    const user_id = req.user?.user_id;
+    const userId = req.user?.user_id;
 
-    if (!user_id) {
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
@@ -140,7 +140,7 @@ router.post('/:group_id/prompt-settings/schedules', async (req, res) => {
     }
 
     // Verify user is owner or admin
-    const hasPermission = await isOwnerOrAdmin(user_id, group_id);
+    const hasPermission = await isOwnerOrAdmin(userId, group_id);
     if (!hasPermission) {
       return res.status(403).json({ error: 'Only owners and admins can create schedules' });
     }
@@ -232,9 +232,9 @@ router.post('/:group_id/prompt-settings/schedules', async (req, res) => {
 router.patch('/:group_id/prompt-settings/schedules/:schedule_id', async (req, res) => {
   try {
     const { group_id, schedule_id } = req.params;
-    const user_id = req.user?.user_id;
+    const userId = req.user?.user_id;
 
-    if (!user_id) {
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
@@ -245,7 +245,7 @@ router.patch('/:group_id/prompt-settings/schedules/:schedule_id', async (req, re
     }
 
     // Verify user is owner or admin
-    const hasPermission = await isOwnerOrAdmin(user_id, group_id);
+    const hasPermission = await isOwnerOrAdmin(userId, group_id);
     if (!hasPermission) {
       return res.status(403).json({ error: 'Only owners and admins can update schedules' });
     }
@@ -307,9 +307,9 @@ router.patch('/:group_id/prompt-settings/schedules/:schedule_id', async (req, re
 router.delete('/:group_id/prompt-settings/schedules/:schedule_id', async (req, res) => {
   try {
     const { group_id, schedule_id } = req.params;
-    const user_id = req.user?.user_id;
+    const userId = req.user?.user_id;
 
-    if (!user_id) {
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
@@ -320,7 +320,7 @@ router.delete('/:group_id/prompt-settings/schedules/:schedule_id', async (req, r
     }
 
     // Verify user is owner or admin
-    const hasPermission = await isOwnerOrAdmin(user_id, group_id);
+    const hasPermission = await isOwnerOrAdmin(userId, group_id);
     if (!hasPermission) {
       return res.status(403).json({ error: 'Only owners and admins can delete schedules' });
     }
@@ -371,9 +371,9 @@ router.delete('/:group_id/prompt-settings/schedules/:schedule_id', async (req, r
 router.patch('/:group_id/prompt-settings/schedules/:schedule_id/toggle', async (req, res) => {
   try {
     const { group_id, schedule_id } = req.params;
-    const user_id = req.user?.user_id;
+    const userId = req.user?.user_id;
 
-    if (!user_id) {
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
@@ -384,7 +384,7 @@ router.patch('/:group_id/prompt-settings/schedules/:schedule_id/toggle', async (
     }
 
     // Verify user is owner or admin
-    const hasPermission = await isOwnerOrAdmin(user_id, group_id);
+    const hasPermission = await isOwnerOrAdmin(userId, group_id);
     if (!hasPermission) {
       return res.status(403).json({ error: 'Only owners and admins can toggle schedules' });
     }

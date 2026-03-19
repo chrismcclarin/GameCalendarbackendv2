@@ -17,7 +17,7 @@ router.get('/event/:eventId', async (req, res) => {
   try {
     const { eventId } = req.params;
     const { maxPlayTime, minWeight, maxWeight, sort } = req.query;
-    const auth0UserId = req.user.user_id;
+    const userId = req.user.user_id;
 
     // Look up event to get group_id
     const event = await Event.findByPk(eventId);
@@ -26,7 +26,7 @@ router.get('/event/:eventId', async (req, res) => {
     }
 
     // Verify requesting user is an active group member
-    const isMember = await isActiveMember(auth0UserId, event.group_id);
+    const isMember = await isActiveMember(userId, event.group_id);
     if (!isMember) {
       return res.status(403).json({ error: 'You must be an active group member to view suggestions' });
     }
@@ -59,7 +59,7 @@ router.get('/group/:groupId', async (req, res) => {
   try {
     const { groupId } = req.params;
     const { playerCount, maxPlayTime, minWeight, maxWeight, sort } = req.query;
-    const auth0UserId = req.user.user_id;
+    const userId = req.user.user_id;
 
     if (!playerCount) {
       return res.status(400).json({ error: 'playerCount query parameter is required' });
@@ -71,7 +71,7 @@ router.get('/group/:groupId', async (req, res) => {
     }
 
     // Verify requesting user is an active group member
-    const isMember = await isActiveMember(auth0UserId, groupId);
+    const isMember = await isActiveMember(userId, groupId);
     if (!isMember) {
       return res.status(403).json({ error: 'You must be an active group member to view suggestions' });
     }

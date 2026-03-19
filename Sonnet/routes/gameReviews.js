@@ -73,20 +73,20 @@ router.get('/user/:user_id/group/:group_id', async (req, res) => {
 router.post('/', validateReviewCreate, async (req, res) => {
   try {
     // Use verified user_id from token
-    const user_id = req.user?.user_id;
-    if (!user_id) {
+    const userId = req.user?.user_id;
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
-    
+
     const { group_id, game_id, rating, review_text, is_recommended } = req.body;
-    
+
     // Verify user belongs to group
-    const hasAccess = await isActiveMember(user_id, group_id);
+    const hasAccess = await isActiveMember(userId, group_id);
     if (!hasAccess) {
       return res.status(403).json({ error: 'Access denied to this group' });
     }
-    
-    const user = await User.findOne({ where: { user_id } });
+
+    const user = await User.findOne({ where: { user_id: userId } });
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }

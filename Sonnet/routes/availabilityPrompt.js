@@ -30,7 +30,7 @@ const { scheduleReminders, scheduleDeadlineJob } = require('../services/reminder
 router.get('/prompts/:promptId/respondents', verifyAuth0Token, async (req, res) => {
   try {
     const { promptId } = req.params;
-    const requestingUserId = req.user.user_id;
+    const userId = req.user.user_id;
 
     // 1. Get prompt with group
     const prompt = await AvailabilityPrompt.findByPk(promptId, {
@@ -43,7 +43,7 @@ router.get('/prompts/:promptId/respondents', verifyAuth0Token, async (req, res) 
 
     // 2. Verify requester is a member of the group
     const requesterGroup = await UserGroup.findOne({
-      where: { group_id: prompt.group_id, user_id: requestingUserId, status: 'active' }
+      where: { group_id: prompt.group_id, user_id: userId, status: 'active' }
     });
 
     if (!requesterGroup) {
@@ -73,7 +73,7 @@ router.get('/prompts/:promptId/respondents', verifyAuth0Token, async (req, res) 
     });
 
     // 5. Check if current user has responded (for blind voting visibility)
-    const userHasResponded = responseMap.has(requestingUserId);
+    const userHasResponded = responseMap.has(userId);
     const pollClosed = prompt.status === 'closed' || prompt.status === 'converted' ||
                        new Date(prompt.deadline) < new Date();
 
@@ -96,7 +96,7 @@ router.get('/prompts/:promptId/respondents', verifyAuth0Token, async (req, res) 
                             pollClosed ||
                             userHasResponded ||
                             isAdmin ||
-                            member.user_id === requestingUserId;
+                            member.user_id === userId;
 
       return {
         user_id: member.user_id,
@@ -134,8 +134,8 @@ router.get('/prompts/:promptId/respondents', verifyAuth0Token, async (req, res) 
  */
 router.post('/prompts/:promptId/remind/:userId', verifyAuth0Token, async (req, res) => {
   try {
-    const { promptId, userId } = req.params;
-    const requestingUserId = req.user.user_id;
+    const { promptId, userId: targetUserId } = req.params;
+    const userId = req.user.user_id;
 
     // 1. Get prompt with group and game
     const prompt = await AvailabilityPrompt.findByPk(promptId, {
@@ -151,7 +151,7 @@ router.post('/prompts/:promptId/remind/:userId', verifyAuth0Token, async (req, r
 
     // 2. Verify requester is admin/owner of the group
     const userGroup = await UserGroup.findOne({
-      where: { group_id: prompt.group_id, user_id: requestingUserId, status: 'active' }
+      where: { group_id: prompt.group_id, user_id: userId, status: 'active' }
     });
 
     if (!userGroup || !['owner', 'admin'].includes(userGroup.role)) {
@@ -165,7 +165,7 @@ router.post('/prompts/:promptId/remind/:userId', verifyAuth0Token, async (req, r
 
     // 4. Check cooldown - find or create response record
     let response = await AvailabilityResponse.findOne({
-      where: { prompt_id: promptId, user_id: userId }
+      where: { prompt_id: promptId, user_id: targetUserId }
     });
 
     if (response?.last_reminded_at) {
@@ -185,14 +185,14 @@ router.post('/prompts/:promptId/remind/:userId', verifyAuth0Token, async (req, r
     }
 
     // 6. Get target user
-    const targetUser = await User.findOne({ where: { user_id: userId } });
+    const targetUser = await User.findOne({ where: { user_id: targetUserId } });
     if (!targetUser) {
       return res.status(404).json({ error: 'User not found' });
     }
 
     // 7. Verify target user is in the group
     const targetUserGroup = await UserGroup.findOne({
-      where: { group_id: prompt.group_id, user_id: userId, status: 'active' }
+      where: { group_id: prompt.group_id, user_id: targetUserId, status: 'active' }
     });
     if (!targetUserGroup) {
       return res.status(400).json({ error: 'User is not a member of this group' });
@@ -238,7 +238,7 @@ router.post('/prompts/:promptId/remind/:userId', verifyAuth0Token, async (req, r
       // Create a placeholder response record to track reminder
       await AvailabilityResponse.create({
         prompt_id: promptId,
-        user_id: userId,
+        user_id: targetUserId,
         time_slots: [],
         user_timezone: 'UTC',
         submitted_at: null, // Not submitted yet
@@ -269,7 +269,7 @@ router.post('/prompts/:promptId/remind/:userId', verifyAuth0Token, async (req, r
  */
 router.post('/prompts', verifyAuth0Token, async (req, res) => {
   try {
-    const requestingUserId = req.user.user_id;
+    const userId = req.user.user_id;
     const {
       group_id,
       deadline,
@@ -294,7 +294,7 @@ router.post('/prompts', verifyAuth0Token, async (req, res) => {
 
     // Verify requester is admin/owner
     const userGroup = await UserGroup.findOne({
-      where: { group_id, user_id: requestingUserId, status: 'active' }
+      where: { group_id, user_id: userId, status: 'active' }
     });
 
     if (!userGroup || !['owner', 'admin'].includes(userGroup.role)) {
@@ -354,11 +354,11 @@ router.post('/prompts', verifyAuth0Token, async (req, res) => {
 router.get('/groups/:groupId/prompts/active', verifyAuth0Token, async (req, res) => {
   try {
     const { groupId } = req.params;
-    const requestingUserId = req.user.user_id; // auth0.js sets req.user.user_id = decoded.sub
+    const userId = req.user.user_id; // auth0.js sets req.user.user_id = decoded.sub
 
     // Verify requester is a member of the group
     const userGroup = await UserGroup.findOne({
-      where: { group_id: groupId, user_id: requestingUserId, status: 'active' }
+      where: { group_id: groupId, user_id: userId, status: 'active' }
     });
     if (!userGroup) {
       return res.status(403).json({ error: 'You must be a member of this group' });

@@ -22,9 +22,9 @@ const { isOwnerOrAdmin, isActiveMember } = require('../services/authorizationSer
 router.get('/prompts/:promptId/suggestions', verifyAuth0Token, async (req, res) => {
   try {
     const { promptId } = req.params;
-    const user_id = req.user?.user_id;
+    const userId = req.user?.user_id;
 
-    if (!user_id) {
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
@@ -35,7 +35,7 @@ router.get('/prompts/:promptId/suggestions', verifyAuth0Token, async (req, res) 
     }
 
     // Verify user is a member of the prompt's group
-    const isMember = await isActiveMember(user_id, prompt.group_id);
+    const isMember = await isActiveMember(userId, prompt.group_id);
     if (!isMember) {
       return res.status(403).json({ error: 'You must be a group member to view suggestions' });
     }
@@ -89,9 +89,9 @@ router.get('/prompts/:promptId/suggestions', verifyAuth0Token, async (req, res) 
 router.post('/prompts/:promptId/suggestions/refresh', verifyAuth0Token, async (req, res) => {
   try {
     const { promptId } = req.params;
-    const user_id = req.user?.user_id;
+    const userId = req.user?.user_id;
 
-    if (!user_id) {
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
@@ -102,7 +102,7 @@ router.post('/prompts/:promptId/suggestions/refresh', verifyAuth0Token, async (r
     }
 
     // Verify user is admin or owner of the prompt's group
-    const hasPermission = await isOwnerOrAdmin(user_id, prompt.group_id);
+    const hasPermission = await isOwnerOrAdmin(userId, prompt.group_id);
     if (!hasPermission) {
       return res.status(403).json({ error: 'Only admins and owners can refresh suggestions' });
     }
@@ -148,9 +148,9 @@ router.post('/prompts/:promptId/suggestions/refresh', verifyAuth0Token, async (r
 router.post('/suggestions/:suggestionId/convert', verifyAuth0Token, async (req, res) => {
   try {
     const { suggestionId } = req.params;
-    const user_id = req.user?.user_id;
+    const userId = req.user?.user_id;
 
-    if (!user_id) {
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
@@ -172,7 +172,7 @@ router.post('/suggestions/:suggestionId/convert', verifyAuth0Token, async (req, 
     }
 
     // Verify user is admin or owner of the group
-    const hasPermission = await isOwnerOrAdmin(user_id, prompt.group_id);
+    const hasPermission = await isOwnerOrAdmin(userId, prompt.group_id);
     if (!hasPermission) {
       return res.status(403).json({
         error: 'Only admins and owners can convert suggestions to events'
@@ -191,7 +191,7 @@ router.post('/suggestions/:suggestionId/convert', verifyAuth0Token, async (req, 
     // Convert the suggestion to an event
     const result = await eventCreationService.convertSuggestionToEvent(
       suggestionId,
-      user_id,
+      userId,
       {
         comments: req.body.comments,  // Optional override
         sendEmails: req.body.send_emails !== false  // Default true

@@ -29,17 +29,17 @@ router.get('/user/:user_id',
   validateAuth0UserId('user_id'),
   async (req, res) => {
     try {
-      const verified_user_id = req.user?.user_id;
-      if (!verified_user_id) {
+      const userId = req.user?.user_id;
+      if (!userId) {
         return res.status(401).json({ error: 'Unauthorized' });
       }
 
       // Users can only view their own availability
-      if (req.params.user_id !== verified_user_id) {
+      if (req.params.user_id !== userId) {
         return res.status(403).json({ error: 'Forbidden: Cannot access other users\' availability' });
       }
 
-      const user = await User.findOne({ where: { user_id: verified_user_id } });
+      const user = await User.findOne({ where: { user_id: userId } });
       if (!user) {
         return res.status(404).json({ error: 'User not found' });
       }
@@ -111,12 +111,12 @@ router.post('/user/:user_id/recurring',
   ],
   async (req, res) => {
     try {
-      const verified_user_id = req.user?.user_id;
-      if (!verified_user_id) {
+      const userId = req.user?.user_id;
+      if (!userId) {
         return res.status(401).json({ error: 'Unauthorized' });
       }
 
-      if (req.params.user_id !== verified_user_id) {
+      if (req.params.user_id !== userId) {
         return res.status(403).json({ error: 'Forbidden: Cannot create availability for other users' });
       }
 
@@ -141,7 +141,7 @@ router.post('/user/:user_id/recurring',
       }
 
       const pattern = await UserAvailability.create({
-        user_id: verified_user_id,
+        user_id: userId,
         type: 'recurring_pattern',
         pattern_data: {
           dayOfWeek,
@@ -182,12 +182,12 @@ router.post('/user/:user_id/override',
   ],
   async (req, res) => {
     try {
-      const verified_user_id = req.user?.user_id;
-      if (!verified_user_id) {
+      const userId = req.user?.user_id;
+      if (!userId) {
         return res.status(401).json({ error: 'Unauthorized' });
       }
 
-      if (req.params.user_id !== verified_user_id) {
+      if (req.params.user_id !== userId) {
         return res.status(403).json({ error: 'Forbidden: Cannot create availability for other users' });
       }
 
@@ -209,7 +209,7 @@ router.post('/user/:user_id/override',
       }
 
       const override = await UserAvailability.create({
-        user_id: verified_user_id,
+        user_id: userId,
         type: 'specific_override',
         pattern_data: {
           date,
@@ -235,8 +235,8 @@ router.delete('/:id',
   validateUUID('id'),
   async (req, res) => {
     try {
-      const verified_user_id = req.user?.user_id;
-      if (!verified_user_id) {
+      const userId = req.user?.user_id;
+      if (!userId) {
         return res.status(401).json({ error: 'Unauthorized' });
       }
 
@@ -246,7 +246,7 @@ router.delete('/:id',
       }
 
       // Users can only delete their own availability
-      if (availability.user_id !== verified_user_id) {
+      if (availability.user_id !== userId) {
         return res.status(403).json({ error: 'Forbidden: Cannot delete other users\' availability' });
       }
 
@@ -263,8 +263,8 @@ router.get('/group/:group_id/overlaps',
   validateUUID('group_id'),
   async (req, res) => {
     try {
-      const verified_user_id = req.user?.user_id;
-      if (!verified_user_id) {
+      const userId = req.user?.user_id;
+      if (!userId) {
         return res.status(401).json({ error: 'Unauthorized' });
       }
 
@@ -275,7 +275,7 @@ router.get('/group/:group_id/overlaps',
         userGroup = await UserGroup.findOne({
           where: {
             group_id: req.params.group_id,
-            user_id: verified_user_id,
+            user_id: userId,
             status: 'active',
           },
         });
@@ -346,17 +346,17 @@ router.get('/user/:user_id/patterns',
   validateAuth0UserId('user_id'),
   async (req, res) => {
     try {
-      const verified_user_id = req.user?.user_id;
-      if (!verified_user_id) {
+      const userId = req.user?.user_id;
+      if (!userId) {
         return res.status(401).json({ error: 'Unauthorized' });
       }
 
-      if (req.params.user_id !== verified_user_id) {
+      if (req.params.user_id !== userId) {
         return res.status(403).json({ error: 'Forbidden: Cannot access other users\' availability patterns' });
       }
 
       const patterns = await UserAvailability.findAll({
-        where: { user_id: verified_user_id },
+        where: { user_id: userId },
         order: [['createdAt', 'DESC']],
       });
 

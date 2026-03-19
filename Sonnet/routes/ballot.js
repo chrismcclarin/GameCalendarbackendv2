@@ -60,7 +60,7 @@ async function closeBallot(event, options) {
 router.get('/:eventId', async (req, res) => {
   try {
     const { eventId } = req.params;
-    const auth0UserId = req.user.user_id;
+    const userId = req.user.user_id;
 
     // Find event with ballot options and votes
     const event = await Event.findByPk(eventId, {
@@ -81,7 +81,7 @@ router.get('/:eventId', async (req, res) => {
     }
 
     // Verify user is in the event's group
-    const isMember = await isActiveMember(auth0UserId, event.group_id);
+    const isMember = await isActiveMember(userId, event.group_id);
     if (!isMember) {
       return res.status(403).json({ error: 'You must be an active member of this group' });
     }
@@ -110,7 +110,7 @@ router.get('/:eventId', async (req, res) => {
     }
 
     // Check if user is organizer (owner/admin)
-    const isOrganizer = await isOwnerOrAdmin(auth0UserId, event.group_id);
+    const isOrganizer = await isOwnerOrAdmin(userId, event.group_id);
 
     const options = event.EventBallotOptions || [];
 
@@ -159,7 +159,7 @@ router.get('/:eventId', async (req, res) => {
             game_name: opt.game_name,
             display_order: opt.display_order,
             vote_count: (opt.EventBallotVotes || []).length,
-            user_voted: (opt.EventBallotVotes || []).some(v => v.user_id === auth0UserId),
+            user_voted: (opt.EventBallotVotes || []).some(v => v.user_id === userId),
           })),
         winner,
         needs_tie_break: needsTieBreak || (persistedNeedsTieBreak && !persistedNeedsFallbackPick),
@@ -179,7 +179,7 @@ router.get('/:eventId', async (req, res) => {
           game_id: opt.game_id,
           game_name: opt.game_name,
           display_order: opt.display_order,
-          user_voted: (opt.EventBallotVotes || []).some(v => v.user_id === auth0UserId),
+          user_voted: (opt.EventBallotVotes || []).some(v => v.user_id === userId),
         })),
       winner,
     });
@@ -195,7 +195,7 @@ router.get('/:eventId', async (req, res) => {
 router.post('/:eventId/options', validateBallotOptions, async (req, res) => {
   try {
     const { eventId } = req.params;
-    const auth0UserId = req.user.user_id;
+    const userId = req.user.user_id;
     const { options } = req.body;
 
     // Find event
@@ -205,7 +205,7 @@ router.post('/:eventId/options', validateBallotOptions, async (req, res) => {
     }
 
     // Verify user is an active member of the group
-    const isMember = await isActiveMember(auth0UserId, event.group_id);
+    const isMember = await isActiveMember(userId, event.group_id);
     if (!isMember) {
       return res.status(403).json({ error: 'You must be an active member of this group to create a ballot' });
     }
@@ -255,7 +255,7 @@ router.post('/:eventId/options', validateBallotOptions, async (req, res) => {
 router.put('/:eventId/options', validateBallotOptions, async (req, res) => {
   try {
     const { eventId } = req.params;
-    const auth0UserId = req.user.user_id;
+    const userId = req.user.user_id;
     const { options } = req.body;
 
     // Find event
@@ -270,7 +270,7 @@ router.put('/:eventId/options', validateBallotOptions, async (req, res) => {
     }
 
     // Verify user is an active member of the group
-    const isMember = await isActiveMember(auth0UserId, event.group_id);
+    const isMember = await isActiveMember(userId, event.group_id);
     if (!isMember) {
       return res.status(403).json({ error: 'You must be an active member of this group to update ballot options' });
     }
@@ -309,7 +309,7 @@ router.put('/:eventId/options', validateBallotOptions, async (req, res) => {
 router.post('/:eventId/vote', validateBallotVote, async (req, res) => {
   try {
     const { eventId } = req.params;
-    const auth0UserId = req.user.user_id;
+    const userId = req.user.user_id;
     const { option_id } = req.body;
 
     // Find event
@@ -327,7 +327,7 @@ router.post('/:eventId/vote', validateBallotVote, async (req, res) => {
     const rsvp = await EventRsvp.findOne({
       where: {
         event_id: eventId,
-        user_id: auth0UserId,
+        user_id: userId,
         status: { [Op.in]: ['yes', 'maybe'] },
       },
     });
@@ -345,7 +345,7 @@ router.post('/:eventId/vote', validateBallotVote, async (req, res) => {
 
     // Toggle vote: if exists, delete; if not, create
     const existingVote = await EventBallotVote.findOne({
-      where: { option_id, user_id: auth0UserId },
+      where: { option_id, user_id: userId },
     });
 
     if (existingVote) {
@@ -353,7 +353,7 @@ router.post('/:eventId/vote', validateBallotVote, async (req, res) => {
       return res.json({ voted: false });
     }
 
-    await EventBallotVote.create({ option_id, user_id: auth0UserId });
+    await EventBallotVote.create({ option_id, user_id: userId });
     return res.json({ voted: true });
   } catch (error) {
     console.error('Error toggling vote:', error.message);
@@ -367,7 +367,7 @@ router.post('/:eventId/vote', validateBallotVote, async (req, res) => {
 router.post('/:eventId/resolve-tie', async (req, res) => {
   try {
     const { eventId } = req.params;
-    const auth0UserId = req.user.user_id;
+    const userId = req.user.user_id;
     const { option_id } = req.body;
 
     if (!option_id) {
@@ -391,7 +391,7 @@ router.post('/:eventId/resolve-tie', async (req, res) => {
     }
 
     // Verify user is organizer (owner/admin)
-    const organizer = await isOwnerOrAdmin(auth0UserId, event.group_id);
+    const organizer = await isOwnerOrAdmin(userId, event.group_id);
     if (!organizer) {
       return res.status(403).json({ error: 'Only group owners and admins can resolve ties' });
     }

@@ -141,7 +141,7 @@ router.get('/respond', async (req, res) => {
 router.post('/', verifyAuth0Token, validateRsvpCreate, async (req, res) => {
   try {
     const { event_id, status, note } = req.body;
-    const auth0UserId = req.user.user_id;
+    const userId = req.user.user_id;
 
     // Look up the event (must exist and not be cancelled)
     const event = await Event.findByPk(event_id);
@@ -153,14 +153,14 @@ router.post('/', verifyAuth0Token, validateRsvpCreate, async (req, res) => {
     }
 
     // Verify user is an active member of the event's group
-    const isMember = await isActiveMember(auth0UserId, event.group_id);
+    const isMember = await isActiveMember(userId, event.group_id);
     if (!isMember) {
       return res.status(403).json({ error: 'You must be an active member of this group to RSVP' });
     }
 
     // Upsert: find existing RSVP or create new
     const existing = await EventRsvp.findOne({
-      where: { event_id, user_id: auth0UserId },
+      where: { event_id, user_id: userId },
     });
 
     let rsvp;
@@ -174,7 +174,7 @@ router.post('/', verifyAuth0Token, validateRsvpCreate, async (req, res) => {
       // Create new RSVP
       rsvp = await EventRsvp.create({
         event_id,
-        user_id: auth0UserId,
+        user_id: userId,
         status,
         note: note || null,
       });
@@ -197,7 +197,7 @@ router.post('/', verifyAuth0Token, validateRsvpCreate, async (req, res) => {
 router.get('/event/:event_id', verifyAuth0Token, async (req, res) => {
   try {
     const { event_id } = req.params;
-    const auth0UserId = req.user.user_id;
+    const userId = req.user.user_id;
 
     // Look up the event
     const event = await Event.findByPk(event_id);
@@ -206,7 +206,7 @@ router.get('/event/:event_id', verifyAuth0Token, async (req, res) => {
     }
 
     // Verify user is an active member of the event's group
-    const isMember = await isActiveMember(auth0UserId, event.group_id);
+    const isMember = await isActiveMember(userId, event.group_id);
     if (!isMember) {
       return res.status(403).json({ error: 'You must be an active member of this group to view RSVPs' });
     }
@@ -241,10 +241,10 @@ router.get('/event/:event_id', verifyAuth0Token, async (req, res) => {
 router.get('/user/:user_id', verifyAuth0Token, async (req, res) => {
   try {
     const { user_id } = req.params;
-    const auth0UserId = req.user.user_id;
+    const userId = req.user.user_id;
 
     // Only allow users to fetch their own RSVPs
-    if (auth0UserId !== user_id) {
+    if (userId !== user_id) {
       return res.status(403).json({ error: 'You can only view your own RSVPs' });
     }
 
@@ -273,7 +273,7 @@ router.get('/user/:user_id', verifyAuth0Token, async (req, res) => {
 router.delete('/:rsvp_id', verifyAuth0Token, async (req, res) => {
   try {
     const { rsvp_id } = req.params;
-    const auth0UserId = req.user.user_id;
+    const userId = req.user.user_id;
 
     const rsvp = await EventRsvp.findByPk(rsvp_id);
     if (!rsvp) {
@@ -281,7 +281,7 @@ router.delete('/:rsvp_id', verifyAuth0Token, async (req, res) => {
     }
 
     // Only the RSVP owner can delete it
-    if (rsvp.user_id !== auth0UserId) {
+    if (rsvp.user_id !== userId) {
       return res.status(403).json({ error: 'You can only remove your own RSVP' });
     }
 

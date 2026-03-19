@@ -11,56 +11,56 @@ const { getUserRoleInGroup, isOwnerOrAdmin, isOwner } = require('../services/aut
 router.get('/user/:user_id', async (req, res) => {
   try {
     // Use verified user_id from token, not from params
-    const verified_user_id = req.user?.user_id;
-    if (!verified_user_id) {
+    const userId = req.user?.user_id;
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
-    
+
     // Verify that the requested user_id matches the authenticated user
-    if (req.params.user_id !== verified_user_id) {
+    if (req.params.user_id !== userId) {
       return res.status(403).json({ error: 'Forbidden: Cannot access other users\' groups' });
     }
-    
+
     let user = await User.findOne({
-      where: { user_id: verified_user_id }
+      where: { user_id: userId }
     });
-    
+
     // If user doesn't exist, auto-create using Auth0 token info
     if (!user) {
       // For Google sign-in, email should be available in the token
       const userEmail = req.user.email;
       if (!userEmail) {
-        console.warn(`No email found in token for user ${verified_user_id}. Available fields:`, {
+        console.warn(`No email found in token for user ${userId}. Available fields:`, {
           name: req.user.name,
           nickname: req.user.nickname,
           given_name: req.user.given_name,
           family_name: req.user.family_name,
         });
       }
-      
+
       // Email is required, so use a valid email format if not provided
       // This should rarely happen with Google sign-in
-      const finalEmail = userEmail || `${verified_user_id.replace(/[|:]/g, '-')}@auth0.local`;
+      const finalEmail = userEmail || `${userId.replace(/[|:]/g, '-')}@auth0.local`;
       const userName = req.user.name || req.user.nickname || req.user.given_name || req.user.email?.split('@')[0] || 'User';
-      
+
       try {
         const [newUser, created] = await User.findOrCreate({
-          where: { user_id: verified_user_id },
+          where: { user_id: userId },
           defaults: {
-            user_id: verified_user_id,
+            user_id: userId,
             email: finalEmail,
             username: userName,
           }
         });
         user = newUser;
-        
+
         if (created) {
           console.log(`Auto-created user: ${user.user_id} (${user.username}) with email: ${user.email}`);
         }
       } catch (error) {
         // If creation fails (e.g., email already exists), try to find the user
         console.error('Error auto-creating user:', error.message);
-        user = await User.findOne({ where: { user_id: verified_user_id } });
+        user = await User.findOne({ where: { user_id: userId } });
         if (!user) {
           throw error; // Re-throw if we still can't find/create the user
         }
@@ -107,14 +107,14 @@ router.get('/user/:user_id', async (req, res) => {
 router.post('/', validateGroupCreate, async (req, res) => {
   try {
     // Use verified user_id from token
-    const user_id = req.user?.user_id;
-    if (!user_id) {
+    const userId = req.user?.user_id;
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
-    
+
     const { name } = req.body;
-    
-    const user = await User.findOne({ where: { user_id } });
+
+    const user = await User.findOne({ where: { user_id: userId } });
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -207,8 +207,8 @@ router.post('/:group_id/users', async (req, res) => {
 router.put('/:group_id/users/:target_user_id/role', async (req, res) => {
   try {
     // Use verified user_id from token
-    const requesting_user_id = req.user?.user_id;
-    if (!requesting_user_id) {
+    const userId = req.user?.user_id;
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     
@@ -216,12 +216,12 @@ router.put('/:group_id/users/:target_user_id/role', async (req, res) => {
     const { role } = req.body; // New role: 'member', 'admin', or 'owner'
     
     // Only owner can change roles
-    const requestingUser = await User.findOne({ where: { user_id: requesting_user_id } });
+    const requestingUser = await User.findOne({ where: { user_id: userId } });
     if (!requestingUser) {
       return res.status(404).json({ error: 'Requesting user not found' });
     }
     
-    const isRequestingOwner = await isOwner(requesting_user_id, group_id);
+    const isRequestingOwner = await isOwner(userId, group_id);
     if (!isRequestingOwner) {
       return res.status(403).json({ error: 'Only the group owner can change user roles' });
     }
@@ -267,15 +267,15 @@ router.put('/:group_id/users/:target_user_id/role', async (req, res) => {
 router.delete('/:group_id', async (req, res) => {
   try {
     // Use verified user_id from token
-    const requesting_user_id = req.user?.user_id;
-    if (!requesting_user_id) {
+    const userId = req.user?.user_id;
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     
     const { group_id } = req.params;
     
     // Check if user is owner
-    const hasPermission = await isOwner(requesting_user_id, group_id);
+    const hasPermission = await isOwner(userId, group_id);
     if (!hasPermission) {
       return res.status(403).json({ error: 'Only the group owner can delete the group' });
     }
@@ -315,14 +315,14 @@ router.delete('/:group_id', async (req, res) => {
 router.delete('/:group_id/users/:target_user_id', async (req, res) => {
   try {
     // Use verified user_id from token
-    const requesting_user_id = req.user?.user_id;
-    if (!requesting_user_id) {
+    const userId = req.user?.user_id;
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     
     const { group_id, target_user_id } = req.params; // Target user to remove
     
-    const requestingUser = await User.findOne({ where: { user_id: requesting_user_id } });
+    const requestingUser = await User.findOne({ where: { user_id: userId } });
     const targetUser = await User.findOne({ where: { user_id: target_user_id } });
     
     if (!requestingUser || !targetUser) {
@@ -330,14 +330,14 @@ router.delete('/:group_id/users/:target_user_id', async (req, res) => {
     }
     
     // Only owner or admin can remove users
-    const hasPermission = await isOwnerOrAdmin(requesting_user_id, group_id);
+    const hasPermission = await isOwnerOrAdmin(userId, group_id);
     if (!hasPermission) {
       return res.status(403).json({ error: 'Only owners and admins can remove users from groups' });
     }
     
     // Owner cannot remove themselves (they must transfer ownership first or delete the group)
-    if (requesting_user_id === target_user_id) {
-      const requestingRole = await getUserRoleInGroup(requesting_user_id, group_id);
+    if (userId === target_user_id) {
+      const requestingRole = await getUserRoleInGroup(userId, group_id);
       if (requestingRole === 'owner') {
         return res.status(400).json({ error: 'Group owner cannot remove themselves. Transfer ownership first or delete the group.' });
       }
@@ -367,8 +367,8 @@ router.delete('/:group_id/users/:target_user_id', async (req, res) => {
 router.put('/:group_id/settings', validateUUID('group_id'), validateGroupUpdate, async (req, res) => {
   try {
     // Use verified user_id from token
-    const requesting_user_id = req.user?.user_id;
-    if (!requesting_user_id) {
+    const userId = req.user?.user_id;
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     
@@ -376,7 +376,7 @@ router.put('/:group_id/settings', validateUUID('group_id'), validateGroupUpdate,
     const { group_id } = req.params;
     
     // Check if user has permission (owner or admin)
-    const hasPermission = await isOwnerOrAdmin(requesting_user_id, group_id);
+    const hasPermission = await isOwnerOrAdmin(userId, group_id);
     if (!hasPermission) {
       return res.status(403).json({ error: 'Only owners and admins can update group settings' });
     }

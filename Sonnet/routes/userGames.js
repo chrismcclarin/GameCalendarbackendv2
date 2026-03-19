@@ -9,17 +9,17 @@ const { validateBGGUsername, validateAuth0UserId } = require('../middleware/vali
 router.get('/user/:user_id', async (req, res) => {
   try {
     // Use verified user_id from token
-    const verified_user_id = req.user?.user_id;
-    if (!verified_user_id) {
+    const userId = req.user?.user_id;
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     
     // Verify that the requested user_id matches the authenticated user
-    if (req.params.user_id !== verified_user_id) {
+    if (req.params.user_id !== userId) {
       return res.status(403).json({ error: 'Forbidden: Cannot access other users\' games' });
     }
     
-    const user = await User.findOne({ where: { user_id: verified_user_id } });
+    const user = await User.findOne({ where: { user_id: userId } });
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -73,17 +73,17 @@ router.post('/user/:user_id/game/:game_id', async (req, res) => {
 router.delete('/user/:user_id/game/:game_id', async (req, res) => {
   try {
     // Use verified user_id from token
-    const verified_user_id = req.user?.user_id;
-    if (!verified_user_id) {
+    const userId = req.user?.user_id;
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     
     // Verify that the requested user_id matches the authenticated user
-    if (req.params.user_id !== verified_user_id) {
+    if (req.params.user_id !== userId) {
       return res.status(403).json({ error: 'Forbidden: Cannot modify other users\' games' });
     }
     
-    const user = await User.findOne({ where: { user_id: verified_user_id } });
+    const user = await User.findOne({ where: { user_id: userId } });
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -107,19 +107,19 @@ router.delete('/user/:user_id/game/:game_id', async (req, res) => {
 router.post('/user/:user_id/import-bgg-collection', validateAuth0UserId('user_id'), validateBGGUsername, async (req, res) => {
   try {
     // Use verified user_id from token
-    const verified_user_id = req.user?.user_id;
-    if (!verified_user_id) {
+    const userId = req.user?.user_id;
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     
     // Verify that the requested user_id matches the authenticated user
-    if (req.params.user_id !== verified_user_id) {
+    if (req.params.user_id !== userId) {
       return res.status(403).json({ error: 'Forbidden: Cannot import games for other users' });
     }
     
     const { bgg_username } = req.body;
 
-    const user = await User.findOne({ where: { user_id: verified_user_id } });
+    const user = await User.findOne({ where: { user_id: userId } });
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }

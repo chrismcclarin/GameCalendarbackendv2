@@ -232,21 +232,21 @@ router.get('/by-theme/:group_id/:theme/:user_id', async (req, res) => {
 router.get('/games/:group_id/:user_id', async (req, res) => {
   try {
     // Use verified user_id from token
-    const verified_user_id = req.user?.user_id;
-    if (!verified_user_id) {
+    const userId = req.user?.user_id;
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     
     const { group_id, user_id } = req.params;
     
     // Verify that the requested user_id matches the authenticated user
-    if (user_id !== verified_user_id) {
+    if (user_id !== userId) {
       return res.status(403).json({ error: 'Forbidden: Cannot access other users\' data' });
     }
     
     const { sort = 'last_played', order = 'desc' } = req.query;
     
-    const hasAccess = await isActiveMember(verified_user_id, group_id);
+    const hasAccess = await isActiveMember(userId, group_id);
     if (!hasAccess) {
       return res.status(403).json({ error: 'Access denied to this group' });
     }

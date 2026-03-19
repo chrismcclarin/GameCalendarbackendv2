@@ -538,8 +538,8 @@ router.post('/', validateEventCreate, async (req, res) => {
 router.put('/:id', validateUUID('id'), validateEventUpdate, async (req, res) => {
   try {
     // Use verified user_id from token
-    const requesting_user_id = req.user?.user_id;
-    if (!requesting_user_id) {
+    const userId = req.user?.user_id;
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     
@@ -549,7 +549,7 @@ router.put('/:id', validateUUID('id'), validateEventUpdate, async (req, res) => 
     }
     
     // Check if user is owner or admin of the group
-    const hasPermission = await isOwnerOrAdmin(requesting_user_id, event.group_id);
+    const hasPermission = await isOwnerOrAdmin(userId, event.group_id);
     if (!hasPermission) {
       return res.status(403).json({ error: 'Only group owners and admins can edit events' });
     }
@@ -713,8 +713,8 @@ router.put('/:id', validateUUID('id'), validateEventUpdate, async (req, res) => 
 router.delete('/:id', async (req, res) => {
   try {
     // Use verified user_id from token
-    const requesting_user_id = req.user?.user_id;
-    if (!requesting_user_id) {
+    const userId = req.user?.user_id;
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     
@@ -724,7 +724,7 @@ router.delete('/:id', async (req, res) => {
     }
     
     // Check if user is owner or admin of the group
-    const hasPermission = await isOwnerOrAdmin(requesting_user_id, event.group_id);
+    const hasPermission = await isOwnerOrAdmin(userId, event.group_id);
     if (!hasPermission) {
       return res.status(403).json({ error: 'Only group owners and admins can delete events' });
     }

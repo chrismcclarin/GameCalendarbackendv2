@@ -258,13 +258,13 @@ router.post('/', async (req, res) => {
 router.put('/:user_id/username', async (req, res) => {
   try {
     // Use verified user_id from token
-    const verified_user_id = req.user?.user_id;
-    if (!verified_user_id) {
+    const userId = req.user?.user_id;
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     
     // Verify that the requested user_id matches the authenticated user
-    if (req.params.user_id !== verified_user_id) {
+    if (req.params.user_id !== userId) {
       return res.status(403).json({ error: 'Forbidden: Cannot update other users\' usernames' });
     }
     
@@ -278,7 +278,7 @@ router.put('/:user_id/username', async (req, res) => {
       return res.status(400).json({ error: 'Username must be 50 characters or less' });
     }
     
-    const user = await User.findOne({ where: { user_id: verified_user_id } });
+    const user = await User.findOne({ where: { user_id: userId } });
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -295,21 +295,21 @@ router.put('/:user_id/username', async (req, res) => {
 router.post('/:user_id/refresh', async (req, res) => {
   try {
     // Use verified user_id from token
-    const verified_user_id = req.user?.user_id;
-    if (!verified_user_id) {
+    const userId = req.user?.user_id;
+    if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     
     // Verify that the requested user_id matches the authenticated user
-    if (req.params.user_id !== verified_user_id) {
+    if (req.params.user_id !== userId) {
       return res.status(403).json({ error: 'Forbidden: Cannot refresh other users\' info' });
     }
     
-    let user = await User.findOne({ where: { user_id: verified_user_id } });
+    let user = await User.findOne({ where: { user_id: userId } });
     
     try {
       // Fetch latest info from Auth0 Management API
-      const auth0User = await auth0Service.getUserById(verified_user_id);
+      const auth0User = await auth0Service.getUserById(userId);
       if (!auth0User) {
         return res.status(404).json({ error: 'User not found in Auth0' });
       }
