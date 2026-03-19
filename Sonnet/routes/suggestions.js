@@ -31,7 +31,7 @@ router.get('/event/:eventId', async (req, res) => {
   try {
     const { eventId } = req.params;
     const { maxPlayTime, minWeight, maxWeight, sort } = req.query;
-    const auth0UserId = req.user.sub;
+    const auth0UserId = req.user.user_id;
 
     // Look up event to get group_id
     const event = await Event.findByPk(eventId);
@@ -73,7 +73,7 @@ router.get('/group/:groupId', async (req, res) => {
   try {
     const { groupId } = req.params;
     const { playerCount, maxPlayTime, minWeight, maxWeight, sort } = req.query;
-    const auth0UserId = req.user.sub;
+    const auth0UserId = req.user.user_id;
 
     if (!playerCount) {
       return res.status(400).json({ error: 'playerCount query parameter is required' });
