@@ -96,6 +96,40 @@ router.get('/:group_id/prompt-settings', async (req, res) => {
       attributes: ['id', 'name', 'image_url', 'min_players', 'max_players']
     });
 
+    // Auto-clear game_id for schedules referencing deleted games
+    const scheduleGameIds = [...new Set(schedules.filter(s => s.game_id).map(s => s.game_id))];
+    let schedulesCleaned = false;
+    if (scheduleGameIds.length > 0) {
+      const existingGames = await Game.findAll({
+        where: { id: scheduleGameIds },
+        attributes: ['id']
+      });
+      const existingGameIds = new Set(existingGames.map(g => g.id));
+
+      schedules = schedules.map(s => {
+        if (s.game_id && !existingGameIds.has(s.game_id)) {
+          // Game was deleted from DB - clear reference
+          schedulesCleaned = true;
+          return { ...s, game_id: null, updated_at: new Date().toISOString() };
+        }
+        return s;
+      });
+
+      // Persist cleanup if any schedules were modified
+      if (schedulesCleaned && settings) {
+        const allSchedules = settings.template_config?.schedules || [];
+        const updatedAll = allSchedules.map(s => {
+          if (s.game_id && !existingGameIds.has(s.game_id) && !s.deleted_at) {
+            return { ...s, game_id: null, updated_at: new Date().toISOString() };
+          }
+          return s;
+        });
+        await settings.update({
+          template_config: { ...settings.template_config, schedules: updatedAll }
+        });
+      }
+    }
+
     res.json({
       id: settings?.id || null,
       group_id,
