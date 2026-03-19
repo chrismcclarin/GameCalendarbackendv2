@@ -40,17 +40,7 @@ function generateRsvpUrl(frontendUrl, eventId, userId, status) {
   return `${frontendUrl}/rsvp/${token}?e=${eventId}&u=${encodeURIComponent(userId)}&s=${status}`;
 }
 
-// Helper: verify user is an active member of the event's group
-const verifyUserInGroup = async (auth0UserId, groupId) => {
-  const userGroup = await UserGroup.findOne({
-    where: {
-      user_id: auth0UserId,
-      group_id: groupId,
-      status: 'active',
-    },
-  });
-  return !!userGroup;
-};
+const { isActiveMember } = require('../services/authorizationService');
 
 // ============================================
 // Public endpoint (no auth required)
@@ -163,7 +153,7 @@ router.post('/', verifyAuth0Token, validateRsvpCreate, async (req, res) => {
     }
 
     // Verify user is an active member of the event's group
-    const isMember = await verifyUserInGroup(auth0UserId, event.group_id);
+    const isMember = await isActiveMember(auth0UserId, event.group_id);
     if (!isMember) {
       return res.status(403).json({ error: 'You must be an active member of this group to RSVP' });
     }
@@ -216,7 +206,7 @@ router.get('/event/:event_id', verifyAuth0Token, async (req, res) => {
     }
 
     // Verify user is an active member of the event's group
-    const isMember = await verifyUserInGroup(auth0UserId, event.group_id);
+    const isMember = await isActiveMember(auth0UserId, event.group_id);
     if (!isMember) {
       return res.status(403).json({ error: 'You must be an active member of this group to view RSVPs' });
     }

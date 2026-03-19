@@ -7,34 +7,7 @@ const { verifyAuth0Token } = require('../middleware/auth0');
 const heatmapService = require('../services/heatmapService');
 const eventCreationService = require('../services/eventCreationService');
 const { AvailabilityPrompt, AvailabilitySuggestion, User, UserGroup } = require('../models');
-
-// Helper function to get user's role in a group
-const getUserRoleInGroup = async (user_id, group_id) => {
-  const user = await User.findOne({ where: { user_id } });
-  if (!user) return null;
-
-  const userGroup = await UserGroup.findOne({
-    where: {
-      user_id: user.user_id, // Use user.user_id (Auth0 string) not user.id (UUID)
-      group_id: group_id,
-      status: 'active'
-    }
-  });
-
-  return userGroup ? userGroup.role : null;
-};
-
-// Helper function to check if user is owner or admin
-const isOwnerOrAdmin = async (user_id, group_id) => {
-  const role = await getUserRoleInGroup(user_id, group_id);
-  return role === 'owner' || role === 'admin';
-};
-
-// Helper function to check if user is a group member
-const isGroupMember = async (user_id, group_id) => {
-  const role = await getUserRoleInGroup(user_id, group_id);
-  return role !== null;
-};
+const { isOwnerOrAdmin, isActiveMember } = require('../services/authorizationService');
 
 /**
  * GET /api/prompts/:promptId/suggestions
@@ -62,7 +35,7 @@ router.get('/prompts/:promptId/suggestions', verifyAuth0Token, async (req, res) 
     }
 
     // Verify user is a member of the prompt's group
-    const isMember = await isGroupMember(user_id, prompt.group_id);
+    const isMember = await isActiveMember(user_id, prompt.group_id);
     if (!isMember) {
       return res.status(403).json({ error: 'You must be a group member to view suggestions' });
     }

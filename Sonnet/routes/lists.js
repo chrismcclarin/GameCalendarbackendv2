@@ -2,30 +2,15 @@
 const express = require('express');
 const { Event, Game, Group, User, UserGroup, EventParticipation, GameReview } = require('../models');
 const { Op, fn, col, literal } = require('sequelize');
+const { isActiveMember } = require('../services/authorizationService');
 const router = express.Router();
-
-// Helper function to verify user belongs to group
-const verifyUserInGroup = async (user_id, group_id) => {
-  const user = await User.findOne({ where: { user_id } });
-  if (!user) return false;
-
-  const userGroup = await UserGroup.findOne({
-    where: {
-      user_id: user.user_id, // Use user.user_id (Auth0 string) not user.id (UUID)
-      group_id: group_id,
-      status: 'active'
-    }
-  });
-
-  return !!userGroup;
-};
 
 // 1. Games won by a specific player in a group (by name)
 router.get('/player-wins/:group_id/:player_name/:user_id', async (req, res) => {
   try {
     const { group_id, player_name, user_id } = req.params;
     
-    const hasAccess = await verifyUserInGroup(user_id, group_id);
+    const hasAccess = await isActiveMember(user_id, group_id);
     if (!hasAccess) {
       return res.status(403).json({ error: 'Access denied to this group' });
     }
@@ -65,7 +50,7 @@ router.get('/player-wins-by-id/:group_id/:player_user_id/:user_id', async (req, 
   try {
     const { group_id, player_user_id, user_id } = req.params;
     
-    const hasAccess = await verifyUserInGroup(user_id, group_id);
+    const hasAccess = await isActiveMember(user_id, group_id);
     if (!hasAccess) {
       return res.status(403).json({ error: 'Access denied to this group' });
     }
@@ -105,7 +90,7 @@ router.get('/most-played/:group_id/:user_id', async (req, res) => {
   try {
     const { group_id, user_id } = req.params;
     
-    const hasAccess = await verifyUserInGroup(user_id, group_id);
+    const hasAccess = await isActiveMember(user_id, group_id);
     if (!hasAccess) {
       return res.status(403).json({ error: 'Access denied to this group' });
     }
@@ -132,7 +117,7 @@ router.get('/least-played/:group_id/:user_id', async (req, res) => {
   try {
     const { group_id, user_id } = req.params;
     
-    const hasAccess = await verifyUserInGroup(user_id, group_id);
+    const hasAccess = await isActiveMember(user_id, group_id);
     if (!hasAccess) {
       return res.status(403).json({ error: 'Access denied to this group' });
     }
@@ -159,7 +144,7 @@ router.get('/player-picks/:group_id/:player_name/:user_id', async (req, res) => 
   try {
     const { group_id, player_name, user_id } = req.params;
     
-    const hasAccess = await verifyUserInGroup(user_id, group_id);
+    const hasAccess = await isActiveMember(user_id, group_id);
     if (!hasAccess) {
       return res.status(403).json({ error: 'Access denied to this group' });
     }
@@ -189,7 +174,7 @@ router.get('/player-picks-by-id/:group_id/:player_user_id/:user_id', async (req,
   try {
     const { group_id, player_user_id, user_id } = req.params;
     
-    const hasAccess = await verifyUserInGroup(user_id, group_id);
+    const hasAccess = await isActiveMember(user_id, group_id);
     if (!hasAccess) {
       return res.status(403).json({ error: 'Access denied to this group' });
     }
@@ -219,7 +204,7 @@ router.get('/by-theme/:group_id/:theme/:user_id', async (req, res) => {
   try {
     const { group_id, theme, user_id } = req.params;
     
-    const hasAccess = await verifyUserInGroup(user_id, group_id);
+    const hasAccess = await isActiveMember(user_id, group_id);
     if (!hasAccess) {
       return res.status(403).json({ error: 'Access denied to this group' });
     }
@@ -261,7 +246,7 @@ router.get('/games/:group_id/:user_id', async (req, res) => {
     
     const { sort = 'last_played', order = 'desc' } = req.query;
     
-    const hasAccess = await verifyUserInGroup(verified_user_id, group_id);
+    const hasAccess = await isActiveMember(verified_user_id, group_id);
     if (!hasAccess) {
       return res.status(403).json({ error: 'Access denied to this group' });
     }
@@ -402,7 +387,7 @@ router.get('/alphabetical/:group_id/:user_id', async (req, res) => {
   try {
     const { group_id, user_id } = req.params;
     
-    const hasAccess = await verifyUserInGroup(user_id, group_id);
+    const hasAccess = await isActiveMember(user_id, group_id);
     if (!hasAccess) {
       return res.status(403).json({ error: 'Access denied to this group' });
     }
@@ -430,7 +415,7 @@ router.get('/player-games/:group_id/:player_name/:user_id', async (req, res) => 
   try {
     const { group_id, player_name, user_id } = req.params;
     
-    const hasAccess = await verifyUserInGroup(user_id, group_id);
+    const hasAccess = await isActiveMember(user_id, group_id);
     if (!hasAccess) {
       return res.status(403).json({ error: 'Access denied to this group' });
     }
@@ -460,7 +445,7 @@ router.get('/player-games-by-id/:group_id/:player_user_id/:user_id', async (req,
   try {
     const { group_id, player_user_id, user_id } = req.params;
     
-    const hasAccess = await verifyUserInGroup(user_id, group_id);
+    const hasAccess = await isActiveMember(user_id, group_id);
     if (!hasAccess) {
       return res.status(403).json({ error: 'Access denied to this group' });
     }
@@ -490,7 +475,7 @@ router.get('/players/:group_id/:user_id', async (req, res) => {
   try {
     const { group_id, user_id } = req.params;
     
-    const hasAccess = await verifyUserInGroup(user_id, group_id);
+    const hasAccess = await isActiveMember(user_id, group_id);
     if (!hasAccess) {
       return res.status(403).json({ error: 'Access denied to this group' });
     }

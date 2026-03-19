@@ -4,34 +4,7 @@ const { Group, User, UserGroup, Event, Game, EventParticipation, GameReview } = 
 const { Op } = require('sequelize');
 const router = express.Router();
 const { validateGroupCreate, validateGroupUpdate, validateUUID } = require('../middleware/validators');
-
-// Helper function to get user's role in a group
-const getUserRoleInGroup = async (user_id, group_id) => {
-  const user = await User.findOne({ where: { user_id } });
-  if (!user) return null;
-  
-  const userGroup = await UserGroup.findOne({
-    where: {
-      user_id: user.user_id, // Use user.user_id (Auth0 string) not user.id (UUID)
-      group_id: group_id,
-      status: 'active'
-    }
-  });
-
-  return userGroup ? userGroup.role : null;
-};
-
-// Helper function to check if user is owner or admin
-const isOwnerOrAdmin = async (user_id, group_id) => {
-  const role = await getUserRoleInGroup(user_id, group_id);
-  return role === 'owner' || role === 'admin';
-};
-
-// Helper function to check if user is owner
-const isOwner = async (user_id, group_id) => {
-  const role = await getUserRoleInGroup(user_id, group_id);
-  return role === 'owner';
-};
+const { getUserRoleInGroup, isOwnerOrAdmin, isOwner } = require('../services/authorizationService');
 
 // Get all groups for a user
 // user_id is now extracted from verified JWT token (req.user.user_id)

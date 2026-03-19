@@ -3,23 +3,7 @@ const express = require('express');
 const { GameReview, User, Group, Game, UserGroup } = require('../models');
 const router = express.Router();
 const { validateReviewCreate, validateUUID } = require('../middleware/validators');
-
-
-// Helper function to verify user belongs to group
-const verifyUserInGroup = async (user_id, group_id) => {
-  const user = await User.findOne({ where: { user_id } });
-  if (!user) return false;
-
-  const userGroup = await UserGroup.findOne({
-    where: {
-      user_id: user.user_id, // Use user.user_id (Auth0 string) not user.id (UUID)
-      group_id: group_id,
-      status: 'active'
-    }
-  });
-
-  return !!userGroup;
-};
+const { isActiveMember } = require('../services/authorizationService');
 
 
 // Get reviews for a game in a specific group
@@ -29,7 +13,7 @@ router.get('/game/:game_id/group/:group_id', async (req, res) => {
     const { user_id } = req.query;
     
     if (user_id) {
-      const hasAccess = await verifyUserInGroup(user_id, group_id);
+      const hasAccess = await isActiveMember(user_id, group_id);
       if (!hasAccess) {
         return res.status(403).json({ error: 'Access denied to this group' });
       }
@@ -58,7 +42,7 @@ router.get('/user/:user_id/group/:group_id', async (req, res) => {
     const { user_id } = req.query;
     
     if (user_id) {
-      const hasAccess = await verifyUserInGroup(user_id, group_id);
+      const hasAccess = await isActiveMember(user_id, group_id);
       if (!hasAccess) {
         return res.status(403).json({ error: 'Access denied to this group' });
       }
@@ -97,7 +81,7 @@ router.post('/', validateReviewCreate, async (req, res) => {
     const { group_id, game_id, rating, review_text, is_recommended } = req.body;
     
     // Verify user belongs to group
-    const hasAccess = await verifyUserInGroup(user_id, group_id);
+    const hasAccess = await isActiveMember(user_id, group_id);
     if (!hasAccess) {
       return res.status(403).json({ error: 'Access denied to this group' });
     }

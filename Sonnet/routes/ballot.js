@@ -11,46 +11,8 @@ const {
   Game,
 } = require('../models');
 const { validateBallotOptions, validateBallotVote } = require('../middleware/validators');
+const { isOwnerOrAdmin, isActiveMember } = require('../services/authorizationService');
 const router = express.Router();
-
-// ============================================
-// Helper functions
-// ============================================
-
-/**
- * Check if user is owner or admin of the group
- * @param {string} auth0UserId - Auth0 user ID string
- * @param {string} groupId - Group UUID
- * @returns {Promise<boolean>}
- */
-async function isOwnerOrAdmin(auth0UserId, groupId) {
-  const userGroup = await UserGroup.findOne({
-    where: {
-      user_id: auth0UserId,
-      group_id: groupId,
-      status: 'active',
-      role: { [Op.in]: ['owner', 'admin'] },
-    },
-  });
-  return !!userGroup;
-}
-
-/**
- * Check if user is an active member of a group
- * @param {string} auth0UserId - Auth0 user ID string
- * @param {string} groupId - Group UUID
- * @returns {Promise<boolean>}
- */
-async function verifyUserInGroup(auth0UserId, groupId) {
-  const userGroup = await UserGroup.findOne({
-    where: {
-      user_id: auth0UserId,
-      group_id: groupId,
-      status: 'active',
-    },
-  });
-  return !!userGroup;
-}
 
 /**
  * Close the ballot: count votes, determine winner or tie, update event
@@ -119,7 +81,7 @@ router.get('/:eventId', async (req, res) => {
     }
 
     // Verify user is in the event's group
-    const isMember = await verifyUserInGroup(auth0UserId, event.group_id);
+    const isMember = await isActiveMember(auth0UserId, event.group_id);
     if (!isMember) {
       return res.status(403).json({ error: 'You must be an active member of this group' });
     }
@@ -243,7 +205,7 @@ router.post('/:eventId/options', validateBallotOptions, async (req, res) => {
     }
 
     // Verify user is an active member of the group
-    const isMember = await verifyUserInGroup(auth0UserId, event.group_id);
+    const isMember = await isActiveMember(auth0UserId, event.group_id);
     if (!isMember) {
       return res.status(403).json({ error: 'You must be an active member of this group to create a ballot' });
     }
@@ -308,7 +270,7 @@ router.put('/:eventId/options', validateBallotOptions, async (req, res) => {
     }
 
     // Verify user is an active member of the group
-    const isMember = await verifyUserInGroup(auth0UserId, event.group_id);
+    const isMember = await isActiveMember(auth0UserId, event.group_id);
     if (!isMember) {
       return res.status(403).json({ error: 'You must be an active member of this group to update ballot options' });
     }

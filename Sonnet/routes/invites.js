@@ -8,30 +8,9 @@ const { Group, User, UserGroup, GroupInvite } = require('../models');
 const { body, validationResult } = require('express-validator');
 const emailService = require('../services/emailService');
 
+const { isOwnerOrAdmin } = require('../services/authorizationService');
+
 const router = express.Router();
-
-// Helper function to get user's role in a group
-// Copied from routes/groups.js to avoid cross-module dependency
-const getUserRoleInGroup = async (user_id, group_id) => {
-  const user = await User.findOne({ where: { user_id } });
-  if (!user) return null;
-
-  const userGroup = await UserGroup.findOne({
-    where: {
-      user_id: user.user_id,
-      group_id: group_id,
-      status: 'active',
-    },
-  });
-
-  return userGroup ? userGroup.role : null;
-};
-
-// Helper function to check if user is owner or admin
-const isOwnerOrAdmin = async (user_id, group_id) => {
-  const role = await getUserRoleInGroup(user_id, group_id);
-  return role === 'owner' || role === 'admin';
-};
 
 // ============================================
 // GET /info/:token - Public endpoint (no auth)

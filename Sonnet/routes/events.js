@@ -80,45 +80,7 @@ const formatEventWithCustomParticipants = (event) => {
   };
 };
 const { validateEventCreate, validateEventUpdate, validateUUID } = require('../middleware/validators');
-
-
-// Helper function to verify user belongs to group
-const verifyUserInGroup = async (user_id, group_id) => {
-  const user = await User.findOne({ where: { user_id } });
-  if (!user) return false;
-
-  const userGroup = await UserGroup.findOne({
-    where: {
-      user_id: user.user_id, // Use user.user_id (Auth0 string) not user.id (UUID)
-      group_id: group_id,
-      status: 'active'
-    }
-  });
-
-  return !!userGroup;
-};
-
-// Helper function to get user's role in a group
-const getUserRoleInGroup = async (user_id, group_id) => {
-  const user = await User.findOne({ where: { user_id } });
-  if (!user) return null;
-
-  const userGroup = await UserGroup.findOne({
-    where: {
-      user_id: user.user_id, // Use user.user_id (Auth0 string) not user.id (UUID)
-      group_id: group_id,
-      status: 'active'
-    }
-  });
-
-  return userGroup ? userGroup.role : null;
-};
-
-// Helper function to check if user is owner or admin
-const isOwnerOrAdmin = async (user_id, group_id) => {
-  const role = await getUserRoleInGroup(user_id, group_id);
-  return role === 'owner' || role === 'admin';
-};
+const { isOwnerOrAdmin, isActiveMember } = require('../services/authorizationService');
 
 // Helper: attach RSVP summary counts to an array of formatted events
 const attachRsvpSummaries = async (events) => {
@@ -279,7 +241,7 @@ router.get('/group/:group_id', async (req, res) => {
     const { user_id } = req.query;
     
     if (user_id) {
-      const hasAccess = await verifyUserInGroup(user_id, req.params.group_id);
+      const hasAccess = await isActiveMember(user_id, req.params.group_id);
       if (!hasAccess) {
         return res.status(403).json({ error: 'Access denied to this group' });
       }

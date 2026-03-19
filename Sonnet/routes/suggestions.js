@@ -5,22 +5,8 @@
 const express = require('express');
 const { Event, UserGroup } = require('../models');
 const { getSuggestions } = require('../services/suggestionService');
+const { isActiveMember } = require('../services/authorizationService');
 const router = express.Router();
-
-// ============================================
-// Helper: verify user is active group member
-// ============================================
-
-async function isActiveMember(auth0UserId, groupId) {
-  const membership = await UserGroup.findOne({
-    where: {
-      user_id: auth0UserId,
-      group_id: groupId,
-      status: 'active',
-    },
-  });
-  return !!membership;
-}
 
 // ============================================
 // GET /event/:eventId
