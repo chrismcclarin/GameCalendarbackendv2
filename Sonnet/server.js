@@ -62,6 +62,7 @@ const inviteRoutes = require('./routes/invites');
 const friendshipRoutes = require('./routes/friendships');
 const rsvpRoutes = require('./routes/rsvp');
 const ballotRoutes = require('./routes/ballot');
+const suggestionRoutes = require('./routes/suggestions');
 
 // Scheduler for deadline-based auto-scheduling
 const { deadlineJob } = require('./schedulers/deadlineScheduler');
@@ -276,6 +277,8 @@ app.use('/api/invites', writeOperationLimiter, conditionalInviteAuth, inviteRout
 app.use('/api/friendships', writeOperationLimiter, verifyAuth0Token, friendshipRoutes);
 // Ballot routes (game voting: ballot CRUD, vote toggle, auto-close)
 app.use('/api/ballot', writeOperationLimiter, verifyAuth0Token, ballotRoutes);
+// Suggestion routes (smart game suggestions based on group collections)
+app.use('/api/suggestions', verifyAuth0Token, suggestionRoutes);
 // RSVP routes moved to public section above (per-route auth inside rsvp.js)
 
 // Health check
