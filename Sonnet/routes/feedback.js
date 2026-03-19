@@ -1,7 +1,15 @@
 // routes/feedback.js
 const express = require('express');
 const router = express.Router();
-const { Octokit } = require('@octokit/rest');
+// @octokit/rest is ESM-only; use dynamic import
+let Octokit;
+async function getOctokit() {
+  if (!Octokit) {
+    const mod = await import('@octokit/rest');
+    Octokit = mod.Octokit;
+  }
+  return Octokit;
+}
 const { validateFeedback } = require('../middleware/validators');
 const { verifyAuth0Token } = require('../middleware/auth0');
 const { Feedback } = require('../models');
@@ -46,7 +54,8 @@ router.post('/github', verifyAuth0Token, async (req, res) => {
     const labels = [label || 'feedback:general'];
 
     try {
-      const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+      const OctokitClass = await getOctokit();
+      const octokit = new OctokitClass({ auth: process.env.GITHUB_TOKEN });
       await octokit.issues.create({
         owner: process.env.GITHUB_REPO_OWNER,
         repo: process.env.GITHUB_REPO_NAME,
