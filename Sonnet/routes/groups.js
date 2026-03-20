@@ -68,7 +68,6 @@ router.get('/user/:user_id', async (req, res) => {
     }
     
     // Get all groups for this user using UserGroup join
-    const { UserGroup } = require('../models');
     const userGroups = await UserGroup.findAll({
       where: { user_id: user.user_id, status: 'active' }, // Use user.user_id (Auth0 string) not user.id (UUID)
       attributes: ['group_id']

@@ -6,7 +6,7 @@ const availabilityService = require('../services/availabilityService');
 const { sendSafeError } = require('../utils/errorHandler');
 const { validateUUID, validateAuth0UserId } = require('../middleware/validators');
 const router = express.Router();
-const { body, param, query, validationResult } = require('express-validator');
+const { body, validationResult } = require('express-validator');
 
 // Validation middleware
 const validate = (req, res, next) => {

@@ -3,7 +3,7 @@
 // Mounted at /api/suggestions (auth required via server.js verifyAuth0Token).
 
 const express = require('express');
-const { Event, UserGroup } = require('../models');
+const { Event } = require('../models');
 const { getSuggestions } = require('../services/suggestionService');
 const { isActiveMember } = require('../services/authorizationService');
 const router = express.Router();

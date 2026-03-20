@@ -7,7 +7,6 @@ const {
   EventBallotOption,
   EventBallotVote,
   EventRsvp,
-  UserGroup,
   Game,
 } = require('../models');
 const { validateBallotOptions, validateBallotVote } = require('../middleware/validators');

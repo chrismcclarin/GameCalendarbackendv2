@@ -1,6 +1,6 @@
 // routes/games.js
 const express = require('express');
-const { Game, Event, EventParticipation, GameReview, User, Group, UserGame, UserGroup } = require('../models');
+const { Game, Event, EventParticipation, GameReview, User, UserGame, UserGroup } = require('../models');
 const { Op } = require('sequelize');
 const router = express.Router();
 

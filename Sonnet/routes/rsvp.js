@@ -2,7 +2,7 @@
 // RSVP CRUD API endpoints for event responses (yes/no/maybe)
 const express = require('express');
 const crypto = require('crypto');
-const { EventRsvp, Event, User, UserGroup, Game, Group } = require('../models');
+const { EventRsvp, Event, User, Game, Group } = require('../models');
 const { validateRsvpCreate } = require('../middleware/validators');
 const { verifyAuth0Token } = require('../middleware/auth0');
 const router = express.Router();

@@ -1,6 +1,6 @@
 // routes/gameReviews.js
 const express = require('express');
-const { GameReview, User, Group, Game, UserGroup } = require('../models');
+const { GameReview, User, Game } = require('../models');
 const router = express.Router();
 const { validateReviewCreate, validateUUID } = require('../middleware/validators');
 const { isActiveMember } = require('../services/authorizationService');
