@@ -5,6 +5,17 @@
 const { UserGroup } = require('../models');
 
 /**
+ * Role hierarchy for permission comparisons.
+ * Higher numbers = more privileges.
+ */
+const ROLE_HIERARCHY = {
+  owner: 4,
+  admin: 3,
+  member: 2,
+  pending: 1,
+};
+
+/**
  * Get a user's role in a group.
  * Uses the "direct" pattern: queries UserGroup directly with the Auth0 user_id string.
  * No User table lookup is needed because UserGroup.user_id IS the Auth0 string.
@@ -36,8 +47,9 @@ const isOwnerOrAdmin = async (auth0UserId, groupId) => {
 };
 
 /**
- * Check if user is an active member of a group (any role).
- * Unifies the former verifyUserInGroup, isGroupMember, and isActiveMember helpers.
+ * Check if user is an active member of a group (any role, including pending).
+ * Use for: viewing group content, reading data, voting, RSVP, availability.
+ * Pending members pass this check -- they can read group content.
  * @param {string} auth0UserId - Auth0 user ID string
  * @param {string} groupId - Group UUID
  * @returns {Promise<boolean>}
@@ -45,6 +57,20 @@ const isOwnerOrAdmin = async (auth0UserId, groupId) => {
 const isActiveMember = async (auth0UserId, groupId) => {
   const role = await getUserRoleInGroup(auth0UserId, groupId);
   return role !== null;
+};
+
+/**
+ * Check if user is at least a full member of a group (member, admin, or owner).
+ * Use for: creating events, adding games, writing reviews, managing ballot options
+ * (excludes pending members).
+ * @param {string} auth0UserId - Auth0 user ID string
+ * @param {string} groupId - Group UUID
+ * @returns {Promise<boolean>}
+ */
+const isMemberOrHigher = async (auth0UserId, groupId) => {
+  const role = await getUserRoleInGroup(auth0UserId, groupId);
+  if (!role) return false;
+  return ROLE_HIERARCHY[role] >= ROLE_HIERARCHY['member'];
 };
 
 /**
@@ -62,5 +88,7 @@ module.exports = {
   getUserRoleInGroup,
   isOwnerOrAdmin,
   isActiveMember,
+  isMemberOrHigher,
   isOwner,
+  ROLE_HIERARCHY,
 };

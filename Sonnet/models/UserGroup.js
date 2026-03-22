@@ -18,7 +18,7 @@ const UserGroup = sequelize.define('UserGroup', {
     allowNull: false,
   },
   role: {
-    type: DataTypes.ENUM('member', 'admin', 'owner'),
+    type: DataTypes.ENUM('pending', 'member', 'admin', 'owner'),
     defaultValue: 'member',
   },
   status: {
