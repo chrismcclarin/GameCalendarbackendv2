@@ -103,6 +103,22 @@ router.get('/:group_id/prompt-settings', async (req, res) => {
       }
     }
 
+    // Get group members for recipient selection
+    const groupMembers = await UserGroup.findAll({
+      where: { group_id, status: 'active' },
+      include: [{
+        model: User,
+        attributes: ['id', 'username', 'email'],
+      }],
+    });
+
+    const members = groupMembers.map(ug => ({
+      id: ug.User?.id,
+      user_id: ug.user_id,
+      username: ug.User?.username,
+      display_name: ug.User?.username || ug.User?.email || ug.user_id,
+    }));
+
     res.json({
       id: settings?.id || null,
       group_id,
@@ -112,7 +128,8 @@ router.get('/:group_id/prompt-settings', async (req, res) => {
       is_active: settings?.is_active ?? true,
       template_config: settings?.template_config || { schedules: [] },
       schedules: schedules.filter(s => !s.deleted_at), // Only return non-deleted schedules
-      games: groupGames || []
+      games: groupGames || [],
+      members: members || []
     });
   } catch (error) {
     console.error('Error getting prompt settings:', error);
