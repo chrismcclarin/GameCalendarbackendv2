@@ -66,6 +66,8 @@ const suggestionRoutes = require('./routes/suggestions');
 
 // Scheduler for deadline-based auto-scheduling
 const { deadlineJob } = require('./schedulers/deadlineScheduler');
+// Scheduler for auto-promoting pending members after 24h
+const { autoPromotionJob } = require('./schedulers/autoPromotionScheduler');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -396,6 +398,16 @@ const startServer = async () => {
           console.log('Backup scheduler started (weekly, Sundays 2am UTC)');
         } catch (err) {
           console.error('Backup scheduler failed to start:', err.message);
+        }
+      }
+
+      // Start auto-promotion scheduler (promotes pending members after 24h)
+      if (process.env.NODE_ENV === 'production' || process.env.ENABLE_SCHEDULER === 'true') {
+        try {
+          autoPromotionJob.start();
+          console.log('Auto-promotion scheduler started (every 15 min)');
+        } catch (err) {
+          console.error('Auto-promotion scheduler failed to start:', err.message);
         }
       }
 
