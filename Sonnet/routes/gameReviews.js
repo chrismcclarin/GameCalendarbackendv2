@@ -3,7 +3,7 @@ const express = require('express');
 const { GameReview, User, Game } = require('../models');
 const router = express.Router();
 const { validateReviewCreate, validateUUID } = require('../middleware/validators');
-const { isActiveMember } = require('../services/authorizationService');
+const { isActiveMember, isMemberOrHigher } = require('../services/authorizationService');
 
 
 // Get reviews for a game in a specific group
@@ -80,10 +80,10 @@ router.post('/', validateReviewCreate, async (req, res) => {
 
     const { group_id, game_id, rating, review_text, is_recommended } = req.body;
 
-    // Verify user belongs to group
-    const hasAccess = await isActiveMember(userId, group_id);
+    // Verify user is at least a full member (pending members cannot write reviews)
+    const hasAccess = await isMemberOrHigher(userId, group_id);
     if (!hasAccess) {
-      return res.status(403).json({ error: 'Access denied to this group' });
+      return res.status(403).json({ error: 'Pending members cannot perform this action', required_role: 'member' });
     }
 
     const user = await User.findOne({ where: { user_id: userId } });

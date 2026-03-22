@@ -80,7 +80,7 @@ const formatEventWithCustomParticipants = (event) => {
   };
 };
 const { validateEventCreate, validateEventUpdate, validateUUID } = require('../middleware/validators');
-const { isOwnerOrAdmin, isActiveMember } = require('../services/authorizationService');
+const { isOwnerOrAdmin, isActiveMember, isMemberOrHigher } = require('../services/authorizationService');
 
 // Helper: attach RSVP summary counts to an array of formatted events
 const attachRsvpSummaries = async (events) => {
@@ -304,6 +304,12 @@ router.get('/:event_id', async (req, res) => {
 // Create new event
 router.post('/', validateEventCreate, async (req, res) => {
   try {
+    // Verify user is at least a full member (pending members cannot create events)
+    const userId = req.user?.user_id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
     const {
       group_id,
       game_id,
@@ -320,7 +326,12 @@ router.post('/', validateEventCreate, async (req, res) => {
       timezone, // User's timezone (e.g., 'America/Los_Angeles')
       rsvp_deadline // ISO date string for RSVP/ballot close
     } = req.body;
-    
+
+    const hasPermission = await isMemberOrHigher(userId, group_id);
+    if (!hasPermission) {
+      return res.status(403).json({ error: 'Pending members cannot perform this action', required_role: 'member' });
+    }
+
     const event = await Event.create({
       group_id,
       game_id,

@@ -10,7 +10,7 @@ const {
   Game,
 } = require('../models');
 const { validateBallotOptions, validateBallotVote } = require('../middleware/validators');
-const { isOwnerOrAdmin, isActiveMember } = require('../services/authorizationService');
+const { isOwnerOrAdmin, isActiveMember, isMemberOrHigher } = require('../services/authorizationService');
 const router = express.Router();
 
 /**
@@ -203,10 +203,10 @@ router.post('/:eventId/options', validateBallotOptions, async (req, res) => {
       return res.status(404).json({ error: 'Event not found' });
     }
 
-    // Verify user is an active member of the group
-    const isMember = await isActiveMember(userId, event.group_id);
+    // Verify user is at least a full member (pending members cannot create ballot options)
+    const isMember = await isMemberOrHigher(userId, event.group_id);
     if (!isMember) {
-      return res.status(403).json({ error: 'You must be an active member of this group to create a ballot' });
+      return res.status(403).json({ error: 'Pending members cannot create ballot options', required_role: 'member' });
     }
 
     // Require rsvp_deadline
@@ -268,10 +268,10 @@ router.put('/:eventId/options', validateBallotOptions, async (req, res) => {
       return res.status(400).json({ error: 'Cannot update options on a closed ballot' });
     }
 
-    // Verify user is an active member of the group
-    const isMember = await isActiveMember(userId, event.group_id);
+    // Verify user is at least a full member (pending members cannot update ballot options)
+    const isMember = await isMemberOrHigher(userId, event.group_id);
     if (!isMember) {
-      return res.status(403).json({ error: 'You must be an active member of this group to update ballot options' });
+      return res.status(403).json({ error: 'Pending members cannot update ballot options', required_role: 'member' });
     }
 
     // Delete all existing options (CASCADE deletes votes on removed options)
