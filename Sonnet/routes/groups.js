@@ -192,7 +192,7 @@ router.post('/:group_id/users', async (req, res) => {
       defaults: {
         user_id: user.user_id, // Use user.user_id (Auth0 string) not user.id (UUID)
         group_id: group.id,
-        role: 'pending'
+        role: 'member'
       }
     });
 

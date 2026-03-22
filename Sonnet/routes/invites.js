@@ -305,16 +305,16 @@ router.post('/:invite_id/accept', async (req, res) => {
       defaults: {
         user_id: user.user_id,
         group_id: invite.group_id,
-        role: 'pending',
+        role: 'member',
         status: 'active',
         joined_at: new Date(),
       },
     });
 
-    // If found (already existed), update status to active with pending role
+    // If found (already existed), update status to active
     if (!created) {
       await userGroup.update({
-        role: 'pending',
+        role: 'member',
         status: 'active',
         joined_at: new Date(),
       });
@@ -420,7 +420,7 @@ router.post('/accept-by-token', async (req, res) => {
       defaults: {
         user_id: user.user_id,
         group_id: invite.group_id,
-        role: 'pending',
+        role: 'member',
         status: 'active',
         joined_at: new Date(),
       },
@@ -428,7 +428,7 @@ router.post('/accept-by-token', async (req, res) => {
 
     if (!created) {
       await userGroup.update({
-        role: 'pending',
+        role: 'member',
         status: 'active',
         joined_at: new Date(),
       });
