@@ -192,10 +192,10 @@ router.post('/:group_id/users', async (req, res) => {
       defaults: {
         user_id: user.user_id, // Use user.user_id (Auth0 string) not user.id (UUID)
         group_id: group.id,
-        role: 'member'
+        role: 'pending'
       }
     });
-    
+
     res.json({ message: 'User added to group successfully' });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -306,6 +306,105 @@ router.delete('/:group_id', async (req, res) => {
     res.json({ message: 'Group deleted successfully' });
   } catch (error) {
     console.error('Error deleting group:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Approve a pending member (owner/admin only)
+router.post('/:group_id/users/:target_user_id/approve', async (req, res) => {
+  try {
+    const userId = req.user.user_id;
+    const { group_id, target_user_id } = req.params;
+
+    const hasPermission = await isOwnerOrAdmin(userId, group_id);
+    if (!hasPermission) {
+      return res.status(403).json({ error: 'Only owners and admins can approve members' });
+    }
+
+    const decodedTargetId = decodeURIComponent(target_user_id);
+    const targetUserGroup = await UserGroup.findOne({
+      where: {
+        user_id: decodedTargetId,
+        group_id: group_id,
+        status: 'active',
+        role: 'pending',
+      },
+    });
+
+    if (!targetUserGroup) {
+      return res.status(404).json({ error: 'Pending member not found' });
+    }
+
+    await targetUserGroup.update({ role: 'member' });
+
+    res.json({ success: true, message: 'Member approved' });
+  } catch (error) {
+    console.error('Error approving member:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Reject a pending member (owner/admin only)
+router.post('/:group_id/users/:target_user_id/reject', async (req, res) => {
+  try {
+    const userId = req.user.user_id;
+    const { group_id, target_user_id } = req.params;
+
+    const hasPermission = await isOwnerOrAdmin(userId, group_id);
+    if (!hasPermission) {
+      return res.status(403).json({ error: 'Only owners and admins can reject members' });
+    }
+
+    const decodedTargetId = decodeURIComponent(target_user_id);
+    const targetUserGroup = await UserGroup.findOne({
+      where: {
+        user_id: decodedTargetId,
+        group_id: group_id,
+        status: 'active',
+        role: 'pending',
+      },
+    });
+
+    if (!targetUserGroup) {
+      return res.status(404).json({ error: 'Pending member not found' });
+    }
+
+    await targetUserGroup.destroy();
+
+    res.json({ success: true, message: 'Member rejected and removed from group' });
+  } catch (error) {
+    console.error('Error rejecting member:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Leave a group voluntarily (any non-owner member)
+router.post('/:group_id/leave', async (req, res) => {
+  try {
+    const userId = req.user.user_id;
+    const { group_id } = req.params;
+
+    const userGroup = await UserGroup.findOne({
+      where: {
+        user_id: userId,
+        group_id: group_id,
+        status: 'active',
+      },
+    });
+
+    if (!userGroup) {
+      return res.status(404).json({ error: 'You are not a member of this group' });
+    }
+
+    if (userGroup.role === 'owner') {
+      return res.status(403).json({ error: 'Group owner cannot leave. Transfer ownership or delete the group.' });
+    }
+
+    await userGroup.destroy();
+
+    res.json({ success: true, message: 'You have left the group' });
+  } catch (error) {
+    console.error('Error leaving group:', error);
     res.status(500).json({ error: error.message });
   }
 });
