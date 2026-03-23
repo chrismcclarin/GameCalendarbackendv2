@@ -1,10 +1,11 @@
 // routes/groups.js
 const express = require('express');
+const crypto = require('crypto');
 const { Group, User, UserGroup, Event, Game, EventParticipation, GameReview } = require('../models');
 const { Op } = require('sequelize');
 const router = express.Router();
 const { validateGroupCreate, validateGroupUpdate, validateUUID } = require('../middleware/validators');
-const { getUserRoleInGroup, isOwnerOrAdmin, isOwner } = require('../services/authorizationService');
+const { getUserRoleInGroup, isOwnerOrAdmin, isOwner, isActiveMember } = require('../services/authorizationService');
 
 // Get all groups for a user
 // user_id is now extracted from verified JWT token (req.user.user_id)
@@ -258,6 +259,164 @@ router.put('/:group_id/users/:target_user_id/role', async (req, res) => {
     
     res.json({ message: 'User role updated successfully', role });
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get (or lazily generate) the group's invite token
+router.get('/:group_id/invite-token', async (req, res) => {
+  try {
+    const userId = req.user?.user_id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { group_id } = req.params;
+
+    // Any active member can view/share the QR invite
+    const hasAccess = await isActiveMember(userId, group_id);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const group = await Group.findByPk(group_id);
+    if (!group) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+
+    // Lazily generate invite token if not set
+    if (!group.invite_token) {
+      group.invite_token = crypto.randomBytes(32).toString('hex');
+      await group.save();
+    }
+
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    res.json({
+      invite_token: group.invite_token,
+      invite_url: `${frontendUrl}/invite/group/${group.invite_token}`,
+    });
+  } catch (error) {
+    console.error('Error getting group invite token:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Regenerate the group's invite token (owner/admin only)
+router.post('/:group_id/reset-invite-token', async (req, res) => {
+  try {
+    const userId = req.user?.user_id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { group_id } = req.params;
+
+    const hasPermission = await isOwnerOrAdmin(userId, group_id);
+    if (!hasPermission) {
+      return res.status(403).json({ error: 'Only owners and admins can reset the invite token' });
+    }
+
+    const group = await Group.findByPk(group_id);
+    if (!group) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+
+    group.invite_token = crypto.randomBytes(32).toString('hex');
+    await group.save();
+
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    res.json({
+      invite_token: group.invite_token,
+      invite_url: `${frontendUrl}/invite/group/${group.invite_token}`,
+    });
+  } catch (error) {
+    console.error('Error resetting group invite token:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Public: preview group info from invite token (no auth required)
+router.get('/invite-preview/:token', async (req, res) => {
+  try {
+    const group = await Group.findOne({
+      where: { invite_token: req.params.token },
+    });
+
+    if (!group) {
+      return res.status(404).json({ error: 'Invalid invite link' });
+    }
+
+    // Count active members
+    const memberCount = await UserGroup.count({
+      where: { group_id: group.id, status: 'active' },
+    });
+
+    res.json({
+      group_name: group.name,
+      group_description: group.description || null,
+      member_count: memberCount,
+      group_id: group.id,
+    });
+  } catch (error) {
+    console.error('Error getting group invite preview:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Join a group by invite token (authenticated)
+router.post('/join-by-token', async (req, res) => {
+  try {
+    const userId = req.user?.user_id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { token } = req.body;
+    if (!token) {
+      return res.status(400).json({ error: 'Token is required' });
+    }
+
+    const group = await Group.findOne({
+      where: { invite_token: token },
+    });
+
+    if (!group) {
+      return res.status(404).json({ error: 'Invalid invite link' });
+    }
+
+    // Check for existing UserGroup
+    const existingMembership = await UserGroup.findOne({
+      where: { user_id: userId, group_id: group.id },
+    });
+
+    if (existingMembership) {
+      // Already an active member
+      if (existingMembership.status === 'active' && existingMembership.role !== 'pending') {
+        return res.json({ already_member: true, group_id: group.id });
+      }
+
+      // Re-activate declined or pending membership as full member
+      await existingMembership.update({
+        role: 'member',
+        status: 'active',
+        joined_at: new Date(),
+      });
+
+      return res.json({ success: true, group_id: group.id });
+    }
+
+    // Create new membership -- CRITICAL: role is 'member' NOT 'pending' (QR invites bypass pending)
+    await UserGroup.create({
+      user_id: userId,
+      group_id: group.id,
+      role: 'member',
+      status: 'active',
+      joined_at: new Date(),
+    });
+
+    res.json({ success: true, group_id: group.id });
+  } catch (error) {
+    console.error('Error joining group by token:', error);
     res.status(500).json({ error: error.message });
   }
 });

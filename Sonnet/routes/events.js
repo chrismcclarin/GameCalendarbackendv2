@@ -1,5 +1,6 @@
 // routes/events.js
 const express = require('express');
+const crypto = require('crypto');
 const { Event, Game, User, Group, EventParticipation, UserGroup, EventRsvp } = require('../models');
 const { Op } = require('sequelize');
 const router = express.Router();
@@ -16,10 +17,12 @@ const formatEventWithCustomParticipants = (event) => {
   const regularParticipants = (eventData.EventParticipations || []).map(ep => ({
     user_id: ep.User?.id,
     username: ep.User?.username,
+    email: ep.User?.email,
     score: ep.score,
     faction: ep.faction,
     is_new_player: ep.is_new_player,
     placement: ep.placement,
+    is_guest: ep.is_guest || false,
     is_custom: false
   }));
   
@@ -215,12 +218,12 @@ router.get('/user/:user_id', async (req, res) => {
         { model: User, as: 'PickedBy', attributes: ['id', 'username'] },
         {
           model: EventParticipation,
-          include: [{ model: User, attributes: ['id', 'username', 'user_id'] }]
+          include: [{ model: User, attributes: ['id', 'username', 'user_id', 'email'] }]
         }
       ],
       order: [['start_date', 'DESC']]
     });
-    
+
     // Format all events with custom participants
     let formattedEvents = events.map(event => formatEventWithCustomParticipants(event));
 
@@ -255,7 +258,7 @@ router.get('/group/:group_id', async (req, res) => {
         { model: User, as: 'PickedBy', attributes: ['id', 'username'] },
         {
           model: EventParticipation,
-          include: [{ model: User, attributes: ['id', 'username'] }]
+          include: [{ model: User, attributes: ['id', 'username', 'email'] }]
         }
       ],
       order: [['start_date', 'DESC']]
@@ -286,7 +289,7 @@ router.get('/:event_id', async (req, res) => {
         { model: User, as: 'PickedBy', attributes: ['id', 'username'] },
         {
           model: EventParticipation,
-          include: [{ model: User, attributes: ['id', 'username'] }]
+          include: [{ model: User, attributes: ['id', 'username', 'email'] }]
         }
       ]
     });
@@ -375,14 +378,14 @@ router.post('/', validateEventCreate, async (req, res) => {
         { model: User, as: 'PickedBy', attributes: ['id', 'username'] },
         {
           model: EventParticipation,
-          include: [{ model: User, attributes: ['id', 'username'] }]
+          include: [{ model: User, attributes: ['id', 'username', 'email'] }]
         }
       ]
     });
-    
+
     // Format event with custom participants
     const formattedEvent = formatEventWithCustomParticipants(completeEvent);
-    
+
     // Check if event is in the future (for Google Calendar and email notifications)
     const isFutureEvent = googleCalendarService.isFutureEvent(start_date);
     
@@ -627,7 +630,7 @@ router.put('/:id', validateUUID('id'), validateEventUpdate, async (req, res) => 
         { model: User, as: 'PickedBy', attributes: ['id', 'username'] },
         {
           model: EventParticipation,
-          include: [{ model: User, attributes: ['id', 'username'] }]
+          include: [{ model: User, attributes: ['id', 'username', 'email'] }]
         }
       ]
     });
@@ -719,6 +722,130 @@ router.put('/:id', validateUUID('id'), validateEventUpdate, async (req, res) => 
   }
 });
 
+
+// Get (or lazily generate) the event's invite token
+router.get('/:event_id/invite-token', async (req, res) => {
+  try {
+    const userId = req.user?.user_id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const event = await Event.findByPk(req.params.event_id);
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    // Verify user is an active member of the event's group
+    const hasAccess = await isActiveMember(userId, event.group_id);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Lazily generate invite token if not set
+    if (!event.invite_token) {
+      event.invite_token = crypto.randomBytes(32).toString('hex');
+      await event.save();
+    }
+
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    res.json({
+      invite_token: event.invite_token,
+      invite_url: `${frontendUrl}/invite/game/${event.invite_token}`,
+    });
+  } catch (error) {
+    console.error('Error getting event invite token:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Public: preview event info from invite token (no auth required)
+router.get('/invite-preview/:token', async (req, res) => {
+  try {
+    const event = await Event.findOne({
+      where: { invite_token: req.params.token },
+      include: [
+        { model: Group, attributes: ['id', 'name'] },
+        { model: Game, attributes: ['id', 'name'] },
+      ],
+    });
+
+    if (!event) {
+      return res.status(404).json({ error: 'Invalid invite link' });
+    }
+
+    // Check if event has already passed
+    if (new Date(event.start_date) < new Date()) {
+      return res.status(410).json({ error: 'This game night has already passed', expired: true });
+    }
+
+    res.json({
+      game_name: event.Game?.name || 'Game TBD',
+      event_date: event.start_date,
+      group_name: event.Group?.name,
+      event_id: event.id,
+    });
+  } catch (error) {
+    console.error('Error getting event invite preview:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Join a game event by invite token (authenticated)
+router.post('/join-game-by-token', async (req, res) => {
+  try {
+    const userId = req.user?.user_id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { token } = req.body;
+    if (!token) {
+      return res.status(400).json({ error: 'Token is required' });
+    }
+
+    const event = await Event.findOne({
+      where: { invite_token: token },
+      include: [{ model: Group, attributes: ['id', 'name'] }],
+    });
+
+    if (!event) {
+      return res.status(404).json({ error: 'Invalid invite link' });
+    }
+
+    // Check if event has already passed
+    if (new Date(event.start_date) < new Date()) {
+      return res.status(410).json({ error: 'This game night has already passed', expired: true });
+    }
+
+    // CRITICAL: EventParticipation.user_id is UUID (User.id), not Auth0 string
+    const dbUser = await User.findOne({ where: { user_id: userId } });
+    if (!dbUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Check for existing participation
+    const existingParticipation = await EventParticipation.findOne({
+      where: { event_id: event.id, user_id: dbUser.id },
+    });
+
+    if (existingParticipation) {
+      return res.json({ already_joined: true, event_id: event.id });
+    }
+
+    // Create guest participation
+    await EventParticipation.create({
+      event_id: event.id,
+      user_id: dbUser.id,
+      is_guest: true,
+    });
+
+    res.json({ success: true, event_id: event.id, group_id: event.group_id });
+  } catch (error) {
+    console.error('Error joining game by token:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // Delete event
 router.delete('/:id', async (req, res) => {

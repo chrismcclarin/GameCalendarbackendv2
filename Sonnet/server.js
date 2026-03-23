@@ -198,6 +198,8 @@ app.use((req, res, next) => {
     '/api/games', // Game search is public
     '/api/feedback', // Feedback is public (or optional auth)
     '/health', // Health check is public
+    '/api/groups/invite-preview', // QR code group invite preview (public)
+    '/api/events/invite-preview', // QR code game invite preview (public)
   ];
   
   const isProtectedRoute = protectedRoutes.some(route => req.path.startsWith(route));
@@ -242,9 +244,19 @@ app.use('/api/rsvp', writeOperationLimiter, rsvpRoutes); // RSVP: GET /respond i
 // Apply write operation rate limiting only to POST/PUT/DELETE requests
 // GET requests will use the general apiLimiter
 app.use('/api/users', verifyAuth0Token, userRoutes);
-app.use('/api/groups', writeOperationLimiter, verifyAuth0Token, groupRoutes);
+// Groups: public QR invite preview, auth for everything else
+const conditionalGroupAuth = (req, res, next) => {
+  if (req.method === 'GET' && req.path.match(/^\/invite-preview\//)) return next();
+  return verifyAuth0Token(req, res, next);
+};
+app.use('/api/groups', writeOperationLimiter, conditionalGroupAuth, groupRoutes);
 app.use('/api/groups', writeOperationLimiter, verifyAuth0Token, groupPromptSettingsRoutes);
-app.use('/api/events', writeOperationLimiter, verifyAuth0Token, eventRoutes);
+// Events: public QR invite preview, auth for everything else
+const conditionalEventAuth = (req, res, next) => {
+  if (req.method === 'GET' && req.path.match(/^\/invite-preview\//)) return next();
+  return verifyAuth0Token(req, res, next);
+};
+app.use('/api/events', writeOperationLimiter, conditionalEventAuth, eventRoutes);
 app.use('/api/lists', verifyAuth0Token, listRoutes);
 app.use('/api/game-reviews', writeOperationLimiter, verifyAuth0Token, gameReviewRoutes);
 app.use('/api/user-games', writeOperationLimiter, verifyAuth0Token, userGameRoutes);
