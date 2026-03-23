@@ -234,6 +234,54 @@ router.get('/:user_id', async (req, res) => {
   }
 });
 
+// Mark tutorial as completed
+router.put('/:user_id/tutorial', async (req, res) => {
+  try {
+    const userId = req.user?.user_id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    if (req.params.user_id !== userId) {
+      return res.status(403).json({ error: 'Forbidden: Cannot update other users\' tutorial status' });
+    }
+
+    const user = await User.findOne({ where: { user_id: userId } });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    await user.update({ tutorial_completed: true });
+    res.json({ tutorial_completed: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Reset tutorial for replay
+router.delete('/:user_id/tutorial', async (req, res) => {
+  try {
+    const userId = req.user?.user_id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    if (req.params.user_id !== userId) {
+      return res.status(403).json({ error: 'Forbidden: Cannot reset other users\' tutorial status' });
+    }
+
+    const user = await User.findOne({ where: { user_id: userId } });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    await user.update({ tutorial_completed: false });
+    res.json({ tutorial_completed: false });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Create or update user
 router.post('/', async (req, res) => {
   try {
