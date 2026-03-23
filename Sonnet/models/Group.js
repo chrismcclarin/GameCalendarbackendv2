@@ -30,6 +30,11 @@ const Group = sequelize.define('Group', {
     type: DataTypes.STRING,
     allowNull: true,
   },
+  invite_token: {
+    type: DataTypes.STRING(64),
+    allowNull: true,
+    unique: true,
+  },
 }, {
   timestamps: true,
   indexes: [

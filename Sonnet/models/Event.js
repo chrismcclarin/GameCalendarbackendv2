@@ -67,6 +67,11 @@ const Event = sequelize.define('Event', {
     allowNull: true,
     defaultValue: null, // null = no ballot on this event
   },
+  invite_token: {
+    type: DataTypes.STRING(64),
+    allowNull: true,
+    unique: true,
+  },
 }, {
   timestamps: true,
   indexes: [

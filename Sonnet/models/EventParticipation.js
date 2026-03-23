@@ -33,6 +33,11 @@ const EventParticipation = sequelize.define('EventParticipation', {
     type: DataTypes.INTEGER,
     allowNull: true, // 1st, 2nd, 3rd place, etc.
   },
+  is_guest: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    allowNull: false,
+  },
 }, {
   timestamps: true,
   indexes: [
