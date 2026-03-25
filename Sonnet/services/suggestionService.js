@@ -19,214 +19,225 @@ const { User, Game, UserGame, UserGroup, EventRsvp, GameReview } = require('../m
  * @returns {Promise<Array>} Array of suggestion objects
  */
 async function getSuggestions({ groupId, eventId, playerCount, maxPlayTime, minWeight, maxWeight, sort = 'rating' }) {
-  // ------------------------------------------------------------------
-  // a) Determine player count source
-  // ------------------------------------------------------------------
   let effectivePlayerCount = playerCount;
-  let rsvpUserAuth0Ids = null; // Auth0 string IDs of RSVP'd users
 
-  if (eventId) {
-    // Get RSVP'd users for this event (yes + maybe)
-    const rsvps = await EventRsvp.findAll({
-      where: {
-        event_id: eventId,
-        status: { [Op.in]: ['yes', 'maybe'] },
-      },
-      attributes: ['user_id'],
-    });
+  try {
+    // ------------------------------------------------------------------
+    // a) Determine player count source
+    // ------------------------------------------------------------------
+    let rsvpUserAuth0Ids = null; // Auth0 string IDs of RSVP'd users
 
-    if (rsvps.length === 0) {
+    if (eventId) {
+      // Get RSVP'd users for this event (yes + maybe)
+      const rsvps = await EventRsvp.findAll({
+        where: {
+          event_id: eventId,
+          status: { [Op.in]: ['yes', 'maybe'] },
+        },
+        attributes: ['user_id'],
+      });
+
+      if (rsvps.length === 0) {
+        return { suggestions: [], playerCount: 0 };
+      }
+
+      rsvpUserAuth0Ids = rsvps.map(r => r.user_id); // Auth0 string IDs
+      effectivePlayerCount = rsvps.length;
+    }
+
+    if (!effectivePlayerCount || effectivePlayerCount < 1) {
       return { suggestions: [], playerCount: 0 };
     }
 
-    rsvpUserAuth0Ids = rsvps.map(r => r.user_id); // Auth0 string IDs
-    effectivePlayerCount = rsvps.length;
-  }
+    // ------------------------------------------------------------------
+    // b) Determine whose collections to search
+    // ------------------------------------------------------------------
+    let auth0Ids;
 
-  if (!effectivePlayerCount || effectivePlayerCount < 1) {
-    return { suggestions: [], playerCount: 0 };
-  }
+    if (rsvpUserAuth0Ids) {
+      // Event-scoped: use RSVP'd users
+      auth0Ids = rsvpUserAuth0Ids;
+    } else {
+      // Group-scoped: all active group members
+      const members = await UserGroup.findAll({
+        where: {
+          group_id: groupId,
+          status: 'active',
+        },
+        attributes: ['user_id'], // Auth0 string IDs
+      });
+      auth0Ids = members.map(m => m.user_id);
+    }
 
-  // ------------------------------------------------------------------
-  // b) Determine whose collections to search
-  // ------------------------------------------------------------------
-  let auth0Ids;
+    if (auth0Ids.length === 0) {
+      return { suggestions: [], playerCount: effectivePlayerCount };
+    }
 
-  if (rsvpUserAuth0Ids) {
-    // Event-scoped: use RSVP'd users
-    auth0Ids = rsvpUserAuth0Ids;
-  } else {
-    // Group-scoped: all active group members
-    const members = await UserGroup.findAll({
+    // Map Auth0 string IDs -> User.id UUIDs (UserGame.user_id is a UUID)
+    const users = await User.findAll({
+      where: { user_id: { [Op.in]: auth0Ids } },
+      attributes: ['id', 'user_id', 'username'],
+    });
+
+    const userUuids = users.map(u => u.id);
+    // Build a lookup: UUID -> username
+    const uuidToUsername = {};
+    for (const u of users) {
+      uuidToUsername[u.id] = u.username;
+    }
+
+    if (userUuids.length === 0) {
+      return { suggestions: [], playerCount: effectivePlayerCount };
+    }
+
+    // ------------------------------------------------------------------
+    // c) Query games from collections
+    // ------------------------------------------------------------------
+    const gameWhere = {
+      bgg_id: { [Op.ne]: null },
+      is_custom: false,
+      min_players: { [Op.lte]: effectivePlayerCount },
+      max_players: { [Op.gte]: effectivePlayerCount },
+    };
+
+    if (maxPlayTime) {
+      gameWhere.playing_time = { [Op.lte]: parseInt(maxPlayTime, 10) };
+    }
+    if (minWeight) {
+      gameWhere.weight = { ...(gameWhere.weight || {}), [Op.gte]: parseFloat(minWeight) };
+    }
+    if (maxWeight) {
+      gameWhere.weight = { ...(gameWhere.weight || {}), [Op.lte]: parseFloat(maxWeight) };
+    }
+
+    // Fetch UserGame entries for these users, including Game data
+    const userGames = await UserGame.findAll({
+      where: { user_id: { [Op.in]: userUuids } },
+      include: [{
+        model: Game,
+        where: gameWhere,
+        attributes: ['id', 'name', 'thumbnail_url', 'image_url', 'min_players', 'max_players', 'playing_time', 'weight'],
+      }],
+      attributes: ['user_id', 'game_id'],
+    });
+
+    // ------------------------------------------------------------------
+    // d) Deduplicate games and collect owner information
+    // ------------------------------------------------------------------
+    const gameMap = new Map(); // game_id -> { game, owners: Set }
+
+    for (const ug of userGames) {
+      const game = ug.Game;
+      if (!game) continue;
+
+      if (!gameMap.has(game.id)) {
+        gameMap.set(game.id, {
+          game,
+          owners: new Set(),
+        });
+      }
+      const ownerName = uuidToUsername[ug.user_id] || 'Unknown';
+      gameMap.get(game.id).owners.add(ownerName);
+    }
+
+    if (gameMap.size === 0) {
+      return { suggestions: [], playerCount: effectivePlayerCount };
+    }
+
+    // ------------------------------------------------------------------
+    // e) Fetch group ratings
+    // ------------------------------------------------------------------
+    const gameIds = Array.from(gameMap.keys());
+
+    const reviews = await GameReview.findAll({
       where: {
         group_id: groupId,
-        status: 'active',
+        game_id: { [Op.in]: gameIds },
+        rating: { [Op.ne]: null },
       },
-      attributes: ['user_id'], // Auth0 string IDs
+      attributes: ['game_id', 'rating'],
     });
-    auth0Ids = members.map(m => m.user_id);
-  }
 
-  if (auth0Ids.length === 0) {
-    return { suggestions: [], playerCount: effectivePlayerCount };
-  }
+    // Aggregate: average rating and count per game
+    const ratingMap = {}; // game_id -> { sum, count }
+    for (const r of reviews) {
+      if (!ratingMap[r.game_id]) {
+        ratingMap[r.game_id] = { sum: 0, count: 0 };
+      }
+      ratingMap[r.game_id].sum += parseFloat(r.rating);
+      ratingMap[r.game_id].count += 1;
+    }
 
-  // Map Auth0 string IDs -> User.id UUIDs (UserGame.user_id is a UUID)
-  const users = await User.findAll({
-    where: { user_id: { [Op.in]: auth0Ids } },
-    attributes: ['id', 'user_id', 'username'],
-  });
+    // ------------------------------------------------------------------
+    // f) Build result array
+    // ------------------------------------------------------------------
+    const suggestions = [];
 
-  const userUuids = users.map(u => u.id);
-  // Build a lookup: UUID -> username
-  const uuidToUsername = {};
-  for (const u of users) {
-    uuidToUsername[u.id] = u.username;
-  }
+    for (const [gameId, { game, owners }] of gameMap) {
+      if (!game || !game.name) {
+        console.warn('Skipping suggestion with incomplete game data:', gameId);
+        continue;
+      }
 
-  if (userUuids.length === 0) {
-    return { suggestions: [], playerCount: effectivePlayerCount };
-  }
+      const rating = ratingMap[gameId];
+      const avgRating = rating ? Math.round((rating.sum / rating.count) * 10) / 10 : null;
 
-  // ------------------------------------------------------------------
-  // c) Query games from collections
-  // ------------------------------------------------------------------
-  const gameWhere = {
-    bgg_id: { [Op.ne]: null },
-    is_custom: false,
-    min_players: { [Op.lte]: effectivePlayerCount },
-    max_players: { [Op.gte]: effectivePlayerCount },
-  };
-
-  if (maxPlayTime) {
-    gameWhere.playing_time = { [Op.lte]: parseInt(maxPlayTime, 10) };
-  }
-  if (minWeight) {
-    gameWhere.weight = { ...(gameWhere.weight || {}), [Op.gte]: parseFloat(minWeight) };
-  }
-  if (maxWeight) {
-    gameWhere.weight = { ...(gameWhere.weight || {}), [Op.lte]: parseFloat(maxWeight) };
-  }
-
-  // Fetch UserGame entries for these users, including Game data
-  const userGames = await UserGame.findAll({
-    where: { user_id: { [Op.in]: userUuids } },
-    include: [{
-      model: Game,
-      where: gameWhere,
-      attributes: ['id', 'name', 'thumbnail_url', 'image_url', 'min_players', 'max_players', 'playing_time', 'weight'],
-    }],
-    attributes: ['user_id', 'game_id'],
-  });
-
-  // ------------------------------------------------------------------
-  // d) Deduplicate games and collect owner information
-  // ------------------------------------------------------------------
-  const gameMap = new Map(); // game_id -> { game, owners: Set }
-
-  for (const ug of userGames) {
-    const game = ug.Game;
-    if (!game) continue;
-
-    if (!gameMap.has(game.id)) {
-      gameMap.set(game.id, {
-        game,
-        owners: new Set(),
+      suggestions.push({
+        id: game.id,
+        name: game.name,
+        thumbnail_url: game.thumbnail_url,
+        image_url: game.image_url,
+        min_players: game.min_players,
+        max_players: game.max_players,
+        playing_time: game.playing_time,
+        weight: game.weight != null ? parseFloat(game.weight) : null,
+        owners: Array.from(owners).sort(),
+        avg_group_rating: avgRating,
+        review_count: rating ? rating.count : 0,
       });
     }
-    const ownerName = uuidToUsername[ug.user_id] || 'Unknown';
-    gameMap.get(game.id).owners.add(ownerName);
-  }
 
-  if (gameMap.size === 0) {
-    return { suggestions: [], playerCount: effectivePlayerCount };
-  }
+    // ------------------------------------------------------------------
+    // g) Sort results
+    // ------------------------------------------------------------------
+    switch (sort) {
+      case 'play_time':
+        suggestions.sort((a, b) => {
+          const aTime = a.playing_time ?? Infinity;
+          const bTime = b.playing_time ?? Infinity;
+          return aTime - bTime || (a.name || '').localeCompare(b.name || '');
+        });
+        break;
 
-  // ------------------------------------------------------------------
-  // e) Fetch group ratings
-  // ------------------------------------------------------------------
-  const gameIds = Array.from(gameMap.keys());
+      case 'complexity':
+        suggestions.sort((a, b) => {
+          const aW = a.weight ?? Infinity;
+          const bW = b.weight ?? Infinity;
+          return aW - bW || (a.name || '').localeCompare(b.name || '');
+        });
+        break;
 
-  const reviews = await GameReview.findAll({
-    where: {
-      group_id: groupId,
-      game_id: { [Op.in]: gameIds },
-      rating: { [Op.ne]: null },
-    },
-    attributes: ['game_id', 'rating'],
-  });
+      case 'name':
+        suggestions.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        break;
 
-  // Aggregate: average rating and count per game
-  const ratingMap = {}; // game_id -> { sum, count }
-  for (const r of reviews) {
-    if (!ratingMap[r.game_id]) {
-      ratingMap[r.game_id] = { sum: 0, count: 0 };
+      case 'rating':
+      default:
+        suggestions.sort((a, b) => {
+          // Rated games first, then by rating DESC, then name ASC
+          if (a.avg_group_rating == null && b.avg_group_rating == null) return (a.name || '').localeCompare(b.name || '');
+          if (a.avg_group_rating == null) return 1;
+          if (b.avg_group_rating == null) return -1;
+          return b.avg_group_rating - a.avg_group_rating || (a.name || '').localeCompare(b.name || '');
+        });
+        break;
     }
-    ratingMap[r.game_id].sum += parseFloat(r.rating);
-    ratingMap[r.game_id].count += 1;
+
+    return { suggestions, playerCount: effectivePlayerCount };
+  } catch (err) {
+    console.warn('suggestionService.getSuggestions error:', err.message, { groupId, eventId });
+    return { suggestions: [], playerCount: effectivePlayerCount || 0 };
   }
-
-  // ------------------------------------------------------------------
-  // f) Build result array
-  // ------------------------------------------------------------------
-  const suggestions = [];
-
-  for (const [gameId, { game, owners }] of gameMap) {
-    const rating = ratingMap[gameId];
-    const avgRating = rating ? Math.round((rating.sum / rating.count) * 10) / 10 : null;
-
-    suggestions.push({
-      id: game.id,
-      name: game.name,
-      thumbnail_url: game.thumbnail_url,
-      image_url: game.image_url,
-      min_players: game.min_players,
-      max_players: game.max_players,
-      playing_time: game.playing_time,
-      weight: game.weight != null ? parseFloat(game.weight) : null,
-      owners: Array.from(owners).sort(),
-      avg_group_rating: avgRating,
-      review_count: rating ? rating.count : 0,
-    });
-  }
-
-  // ------------------------------------------------------------------
-  // g) Sort results
-  // ------------------------------------------------------------------
-  switch (sort) {
-    case 'play_time':
-      suggestions.sort((a, b) => {
-        const aTime = a.playing_time ?? Infinity;
-        const bTime = b.playing_time ?? Infinity;
-        return aTime - bTime || a.name.localeCompare(b.name);
-      });
-      break;
-
-    case 'complexity':
-      suggestions.sort((a, b) => {
-        const aW = a.weight ?? Infinity;
-        const bW = b.weight ?? Infinity;
-        return aW - bW || a.name.localeCompare(b.name);
-      });
-      break;
-
-    case 'name':
-      suggestions.sort((a, b) => a.name.localeCompare(b.name));
-      break;
-
-    case 'rating':
-    default:
-      suggestions.sort((a, b) => {
-        // Rated games first, then by rating DESC, then name ASC
-        if (a.avg_group_rating == null && b.avg_group_rating == null) return a.name.localeCompare(b.name);
-        if (a.avg_group_rating == null) return 1;
-        if (b.avg_group_rating == null) return -1;
-        return b.avg_group_rating - a.avg_group_rating || a.name.localeCompare(b.name);
-      });
-      break;
-  }
-
-  return { suggestions, playerCount: effectivePlayerCount };
 }
 
 module.exports = { getSuggestions };

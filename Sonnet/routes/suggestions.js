@@ -45,6 +45,7 @@ router.get('/event/:eventId', async (req, res) => {
       player_count: result.playerCount,
     });
   } catch (err) {
+    console.warn('Suggestions service degraded:', err.message);
     console.error('Suggestions event error:', err);
     return res.status(500).json({ error: 'Failed to fetch suggestions' });
   }
@@ -90,6 +91,7 @@ router.get('/group/:groupId', async (req, res) => {
       player_count: result.playerCount,
     });
   } catch (err) {
+    console.warn('Suggestions service degraded:', err.message);
     console.error('Suggestions group error:', err);
     return res.status(500).json({ error: 'Failed to fetch suggestions' });
   }
