@@ -22,7 +22,7 @@ router.get('/game/:game_id/group/:group_id', async (req, res) => {
     const reviews = await GameReview.findAll({
       where: { game_id, group_id },
       include: [
-        { model: User, attributes: ['id', 'username'] },
+        { model: User, attributes: ['id', 'username', 'user_id'] },
         { model: Game, attributes: ['name'] }
       ],
       order: [['createdAt', 'DESC']]
@@ -56,7 +56,7 @@ router.get('/user/:user_id/group/:group_id', async (req, res) => {
     const reviews = await GameReview.findAll({
       where: { user_id: targetUser.id, group_id },
       include: [
-        { model: User, attributes: ['id', 'username'] },
+        { model: User, attributes: ['id', 'username', 'user_id'] },
         { model: Game, attributes: ['name', 'image_url'] }
       ],
       order: [['createdAt', 'DESC']]
@@ -136,7 +136,7 @@ router.post('/', validateReviewCreate, async (req, res) => {
     // Fetch complete review data
     const completeReview = await GameReview.findByPk(review.id, {
       include: [
-        { model: User, attributes: ['id', 'username'] },
+        { model: User, attributes: ['id', 'username', 'user_id'] },
         { model: Game, attributes: ['name', 'image_url'] }
       ]
     });

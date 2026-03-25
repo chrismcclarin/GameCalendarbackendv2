@@ -214,7 +214,7 @@ router.get('/user/:user_id', async (req, res) => {
           model: Group, 
           attributes: ['id', 'name', 'profile_picture_url', 'background_color', 'background_image_url'] 
         },
-        { model: User, as: 'Winner', attributes: ['id', 'username'] },
+        { model: User, as: 'Winner', attributes: ['id', 'username', 'user_id'] },
         { model: User, as: 'PickedBy', attributes: ['id', 'username'] },
         {
           model: EventParticipation,
@@ -254,11 +254,11 @@ router.get('/group/:group_id', async (req, res) => {
       where: { group_id: req.params.group_id },
       include: [
         { model: Game, attributes: ['name', 'image_url', 'theme'] },
-        { model: User, as: 'Winner', attributes: ['id', 'username'] },
+        { model: User, as: 'Winner', attributes: ['id', 'username', 'user_id'] },
         { model: User, as: 'PickedBy', attributes: ['id', 'username'] },
         {
           model: EventParticipation,
-          include: [{ model: User, attributes: ['id', 'username', 'email'] }]
+          include: [{ model: User, attributes: ['id', 'username', 'user_id', 'email'] }]
         }
       ],
       order: [['start_date', 'DESC']]
@@ -285,11 +285,11 @@ router.get('/:event_id', async (req, res) => {
     const event = await Event.findByPk(req.params.event_id, {
       include: [
         { model: Game, attributes: ['name', 'image_url', 'theme'] },
-        { model: User, as: 'Winner', attributes: ['id', 'username'] },
+        { model: User, as: 'Winner', attributes: ['id', 'username', 'user_id'] },
         { model: User, as: 'PickedBy', attributes: ['id', 'username'] },
         {
           model: EventParticipation,
-          include: [{ model: User, attributes: ['id', 'username', 'email'] }]
+          include: [{ model: User, attributes: ['id', 'username', 'user_id', 'email'] }]
         }
       ]
     });
@@ -374,11 +374,11 @@ router.post('/', validateEventCreate, async (req, res) => {
     const completeEvent = await Event.findByPk(event.id, {
       include: [
         { model: Game, attributes: ['name', 'image_url'] },
-        { model: User, as: 'Winner', attributes: ['id', 'username'] },
+        { model: User, as: 'Winner', attributes: ['id', 'username', 'user_id'] },
         { model: User, as: 'PickedBy', attributes: ['id', 'username'] },
         {
           model: EventParticipation,
-          include: [{ model: User, attributes: ['id', 'username', 'email'] }]
+          include: [{ model: User, attributes: ['id', 'username', 'user_id', 'email'] }]
         }
       ]
     });
@@ -626,11 +626,11 @@ router.put('/:id', validateUUID('id'), validateEventUpdate, async (req, res) => 
     const updatedEvent = await Event.findByPk(event.id, {
       include: [
         { model: Game, attributes: ['name', 'image_url'] },
-        { model: User, as: 'Winner', attributes: ['id', 'username'] },
+        { model: User, as: 'Winner', attributes: ['id', 'username', 'user_id'] },
         { model: User, as: 'PickedBy', attributes: ['id', 'username'] },
         {
           model: EventParticipation,
-          include: [{ model: User, attributes: ['id', 'username', 'email'] }]
+          include: [{ model: User, attributes: ['id', 'username', 'user_id', 'email'] }]
         }
       ]
     });
