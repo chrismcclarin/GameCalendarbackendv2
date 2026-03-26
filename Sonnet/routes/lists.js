@@ -256,14 +256,16 @@ router.get('/games/:group_id/:user_id', async (req, res) => {
     const sortField = validSorts.includes(sort) ? sort : 'last_played';
     const sortOrder = order.toLowerCase() === 'asc' ? 'ASC' : 'DESC';
     
-    // Get all events for the group with game information
+    // Get all events for the group with game information and winner/picker data
     const events = await Event.findAll({
       where: { group_id },
       include: [
-        { 
-          model: Game, 
+        {
+          model: Game,
           attributes: ['id', 'name', 'image_url', 'theme', 'year_published', 'min_players', 'max_players', 'playing_time', 'description']
-        }
+        },
+        { model: User, as: 'Winner', attributes: ['id', 'username', 'user_id'] },
+        { model: User, as: 'PickedBy', attributes: ['id', 'username', 'user_id'] }
       ],
       order: [['start_date', 'DESC']]
     });
@@ -317,7 +319,9 @@ router.get('/games/:group_id/:user_id', async (req, res) => {
           last_played: null,
           first_played: null,
           avg_rating: ratingMap[gameId]?.avg_rating || null,
-          review_count: ratingMap[gameId]?.review_count || 0
+          review_count: ratingMap[gameId]?.review_count || 0,
+          winners: [],
+          pickers: []
         });
       }
       
@@ -332,6 +336,40 @@ router.get('/games/:group_id/:user_id', async (req, res) => {
       // Update first played
       if (!game.first_played || eventDate < new Date(game.first_played)) {
         game.first_played = eventDate.toISOString();
+      }
+
+      // Track winner for this event
+      if (event.Winner) {
+        const existing = game.winners.find(w => w.user_id === event.Winner.user_id);
+        if (existing) {
+          existing.count++;
+        } else {
+          game.winners.push({ id: event.Winner.id, username: event.Winner.username, user_id: event.Winner.user_id, count: 1, is_custom: false });
+        }
+      } else if (event.winner_name) {
+        const existing = game.winners.find(w => w.is_custom && w.username === event.winner_name);
+        if (existing) {
+          existing.count++;
+        } else {
+          game.winners.push({ id: null, username: event.winner_name, user_id: null, count: 1, is_custom: true });
+        }
+      }
+
+      // Track picker for this event
+      if (event.PickedBy) {
+        const existing = game.pickers.find(p => p.user_id === event.PickedBy.user_id);
+        if (existing) {
+          existing.count++;
+        } else {
+          game.pickers.push({ id: event.PickedBy.id, username: event.PickedBy.username, user_id: event.PickedBy.user_id, count: 1, is_custom: false });
+        }
+      } else if (event.picked_by_name) {
+        const existing = game.pickers.find(p => p.is_custom && p.username === event.picked_by_name);
+        if (existing) {
+          existing.count++;
+        } else {
+          game.pickers.push({ id: null, username: event.picked_by_name, user_id: null, count: 1, is_custom: true });
+        }
       }
     });
     
