@@ -4,8 +4,8 @@ const rateLimit = require('express-rate-limit');
 
 // Adjust rate limits based on environment
 const isDevelopment = process.env.NODE_ENV !== 'production';
-const API_LIMIT = isDevelopment ? 1000 : 100; // Much higher limit for development
-const WRITE_LIMIT = isDevelopment ? 500 : 50;
+const API_LIMIT = isDevelopment ? 1000 : 300; // 300 reads per 15 min in production
+const WRITE_LIMIT = isDevelopment ? 500 : 100;
 const AUTH_LIMIT = isDevelopment ? 50 : 5;
 const FEEDBACK_LIMIT = isDevelopment ? 20 : 5;
 
