@@ -53,6 +53,29 @@ const User = sequelize.define('User', {
     defaultValue: false,
     allowNull: false,
   },
+  phone: {
+    type: DataTypes.STRING(20),
+    allowNull: true,
+    defaultValue: null,
+    validate: {
+      isE164(value) {
+        if (value && !/^\+[1-9]\d{1,14}$/.test(value)) {
+          throw new Error('Phone number must be in E.164 format (e.g., +14155552671)');
+        }
+      },
+    },
+  },
+  sms_enabled: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+  },
+  // Shape: { [type]: { email: bool, sms: bool } } -- null = use defaults
+  notification_preferences: {
+    type: DataTypes.JSONB,
+    allowNull: true,
+    defaultValue: null,
+  },
 }, {
   timestamps: true,
   indexes: [
