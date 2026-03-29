@@ -358,6 +358,141 @@ class AvailabilityService {
       throw error;
     }
   }
+
+  /**
+   * Get ISO day of week (1=Monday through 7=Sunday)
+   * @param {Date} date
+   * @returns {number} 1-7
+   */
+  getISODayOfWeek(date) {
+    const day = date.getUTCDay(); // 0=Sunday, 6=Saturday
+    return day === 0 ? 7 : day;   // Convert to 1=Monday, 7=Sunday
+  }
+
+  /**
+   * Format a Date to YYYY-MM-DD string (UTC)
+   * @param {Date} date
+   * @returns {string}
+   */
+  formatDateISO(date) {
+    const y = date.getUTCFullYear();
+    const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(date.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  /**
+   * Generate normalized 1-hour heatmap data for a group's weekly availability.
+   * Wraps calculateGroupOverlaps() and buckets 30-min slots into 1-hour slots
+   * using AND logic (user must be available in both halves to count).
+   *
+   * @param {string} groupId - Group UUID
+   * @param {string} weekStart - ISO date string for the Monday of the week
+   * @param {string} timezone - Timezone string (default 'UTC')
+   * @returns {Promise<Object>} Normalized heatmap data
+   */
+  async getGroupHeatmap(groupId, weekStart, timezone = 'UTC') {
+    // 1. Validate weekStart is a Monday
+    const startDate = new Date(weekStart + 'T00:00:00Z');
+    if (isNaN(startDate.getTime())) {
+      throw new Error('Invalid weekStart date');
+    }
+    const dayOfWeek = startDate.getUTCDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+    if (dayOfWeek !== 1) {
+      throw new Error('weekStart must be a Monday');
+    }
+
+    // 2. Calculate weekEnd (Monday + 7 days = next Monday)
+    const endDate = new Date(startDate);
+    endDate.setUTCDate(endDate.getUTCDate() + 7);
+    const weekStartStr = this.formatDateISO(startDate);
+    const weekEndStr = this.formatDateISO(endDate);
+
+    // 3. Get raw 30-min overlaps from existing method
+    const overlaps = await this.calculateGroupOverlaps(groupId, startDate, endDate, timezone);
+
+    // 4. Query group members to determine who has/lacks availability data
+    const { Group, UserGroup } = require('../models');
+    const group = await Group.findByPk(groupId, {
+      include: [{
+        model: User,
+        through: UserGroup,
+        attributes: ['id', 'user_id', 'username', 'email', 'google_calendar_enabled', 'google_calendar_token'],
+      }],
+    });
+
+    const members = group ? group.Users || [] : [];
+    const totalMembers = members.length;
+
+    // Check each member for availability data sources
+    const membersWithoutData = [];
+    for (const member of members) {
+      const hasGcal = member.google_calendar_enabled && member.google_calendar_token;
+      let hasRecurring = false;
+      if (!hasGcal) {
+        const records = await UserAvailability.findAll({
+          where: { user_id: member.user_id },
+        });
+        hasRecurring = records.length > 0;
+      }
+      if (!hasGcal && !hasRecurring) {
+        membersWithoutData.push({ user_id: member.user_id, username: member.username });
+      }
+    }
+
+    const membersWithData = totalMembers - membersWithoutData.length;
+
+    // 5. Build a lookup map for overlaps: key = "date_HH:MM"
+    const overlapMap = new Map();
+    for (const slot of overlaps) {
+      overlapMap.set(`${slot.date}_${slot.timeSlot}`, slot);
+    }
+
+    // 6. Generate 77 hourly slots (7 days x 11 hours: 12-22)
+    const slots = [];
+    for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
+      const slotDate = new Date(startDate);
+      slotDate.setUTCDate(slotDate.getUTCDate() + dayOffset);
+      const dateStr = this.formatDateISO(slotDate);
+      const isoDayOfWeek = this.getISODayOfWeek(slotDate);
+
+      for (let hour = 12; hour <= 22; hour++) {
+        const h00Key = `${dateStr}_${String(hour).padStart(2, '0')}:00`;
+        const h30Key = `${dateStr}_${String(hour).padStart(2, '0')}:30`;
+
+        const slot00 = overlapMap.get(h00Key);
+        const slot30 = overlapMap.get(h30Key);
+
+        // AND logic: user must be in BOTH sub-slots to count as available
+        const members00 = slot00 ? slot00.availableMembers : [];
+        const members30 = slot30 ? slot30.availableMembers : [];
+
+        // Intersect by user_id
+        const members30Set = new Set(members30.map(m => m.user_id));
+        const availableMembers = members00
+          .filter(m => members30Set.has(m.user_id))
+          .map(m => ({ user_id: m.user_id, username: m.username }));
+
+        slots.push({
+          date: dateStr,
+          dayOfWeek: isoDayOfWeek,
+          hour,
+          availableCount: availableMembers.length,
+          totalMembers,
+          availableMembers,
+        });
+      }
+    }
+
+    return {
+      weekStart: weekStartStr,
+      weekEnd: weekEndStr,
+      totalMembers,
+      membersWithData,
+      membersWithoutData,
+      slots,
+    };
+  }
 }
 
 module.exports = new AvailabilityService();
