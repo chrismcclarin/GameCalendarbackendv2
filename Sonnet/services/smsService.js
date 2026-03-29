@@ -1,6 +1,7 @@
 // services/smsService.js
 // SMS service for sending notifications using Twilio
 const twilio = require('twilio');
+const { sanitizeForSms } = require('../utils/smsUtils');
 
 class SmsService {
   constructor() {
@@ -61,44 +62,76 @@ class SmsService {
    * Build an SMS message body from a notification type and data
    * @param {string} type - Notification type key
    * @param {Object} data - Template data fields
-   * @returns {string} SMS message body (max 160 chars)
+   * @returns {string} SMS message body (max 306 chars = 2 GSM-7 segments)
    */
   buildMessage(type, data) {
-    const templates = {
-      event_confirmation: (d) =>
+    const d = data || {};
+
+    // Phase 49 legacy templates (unchanged behavior)
+    const legacyTemplates = {
+      event_confirmation: () =>
         `NextGameNight: ${d.gameName} is set for ${d.date}! ${d.actionUrl || ''}`.trim(),
 
-      reminder: (d) =>
-        `NextGameNight reminder: ${d.gameName} is ${d.date}. ${d.actionUrl || ''}`.trim(),
-
-      availability_prompt: (d) =>
+      availability_prompt: () =>
         `NextGameNight: ${d.groupName} wants to schedule a game. Share your availability: ${d.actionUrl || ''}`.trim(),
 
-      no_consensus: (d) =>
+      no_consensus: () =>
         `NextGameNight: No consensus for ${d.groupName}. Review options: ${d.actionUrl || ''}`.trim(),
 
-      group_invite: (d) =>
+      group_invite: () =>
         `NextGameNight: ${d.inviterName} invited you to ${d.groupName}! ${d.actionUrl || ''}`.trim(),
 
-      rsvp_magic_link: (d) =>
+      rsvp_magic_link: () =>
         `NextGameNight: RSVP for ${d.gameName} on ${d.date}: ${d.actionUrl || ''}`.trim(),
 
-      friend_request: (d) =>
+      friend_request: () =>
         `NextGameNight: ${d.requesterName} sent you a friend request! ${d.actionUrl || ''}`.trim()
     };
 
-    const templateFn = templates[type];
+    // Phase 50 event notification templates (casual tone, GSM-7 sanitized)
+    const eventTemplates = {
+      event_created: () => {
+        const name = sanitizeForSms(d.eventName);
+        const group = sanitizeForSms(d.groupName);
+        let msg = `Hey! ${name} with ${group} is set for ${d.dateTime}. Details: ${d.eventUrl}`;
+        if (d.rsvpPrompt) msg += ' Reply 1=Yes, 2=No, 3=Maybe';
+        return msg;
+      },
+
+      event_updated: () => {
+        const name = sanitizeForSms(d.eventName);
+        const group = sanitizeForSms(d.groupName);
+        return `Heads up - ${name} with ${group} moved to ${d.dateTime}. Details: ${d.eventUrl}`;
+      },
+
+      event_cancelled: () => {
+        const name = sanitizeForSms(d.eventName);
+        const group = sanitizeForSms(d.groupName);
+        return `Bummer - ${name} with ${group} on ${d.dateTime} has been cancelled.`;
+      },
+
+      reminder: () => {
+        const name = sanitizeForSms(d.eventName);
+        const group = sanitizeForSms(d.groupName);
+        let msg = `Reminder: ${name} with ${group} is ${d.timeUntil}! Details: ${d.eventUrl}`;
+        if (d.rsvpPrompt) msg += ' Reply 1=Yes, 2=No, 3=Maybe';
+        return msg;
+      }
+    };
+
     let message;
 
-    if (templateFn) {
-      message = templateFn(data || {});
+    if (eventTemplates[type]) {
+      message = eventTemplates[type]();
+    } else if (legacyTemplates[type]) {
+      message = legacyTemplates[type]();
     } else {
-      message = `NextGameNight notification: ${(data && data.actionUrl) || 'Check the app for details'}`;
+      message = `NextGameNight notification: ${d.actionUrl || 'Check the app for details'}`;
     }
 
-    // Truncate to 160 chars (SMS segment limit)
-    if (message.length > 160) {
-      return message.substring(0, 157) + '...';
+    // Truncate to 306 chars (2 GSM-7 segments)
+    if (message.length > 306) {
+      return message.substring(0, 303) + '...';
     }
 
     return message;

@@ -61,7 +61,7 @@ describe('smsService', () => {
       expect(msg).toContain('NextGameNight');
     });
 
-    it('renders all 7 notification types without error', () => {
+    it('renders all notification types without error', () => {
       const types = [
         'event_confirmation',
         'reminder',
@@ -69,7 +69,10 @@ describe('smsService', () => {
         'no_consensus',
         'group_invite',
         'rsvp_magic_link',
-        'friend_request'
+        'friend_request',
+        'event_created',
+        'event_updated',
+        'event_cancelled'
       ];
 
       const testData = {
@@ -78,24 +81,29 @@ describe('smsService', () => {
         groupName: 'Board Gamers',
         inviterName: 'Alice',
         requesterName: 'Bob',
-        actionUrl: 'https://app.test/action'
+        actionUrl: 'https://app.test/action',
+        // Phase 50 event template fields
+        eventName: 'Catan',
+        dateTime: 'Friday',
+        eventUrl: 'https://app.test/events/123',
+        timeUntil: 'tomorrow'
       };
 
       types.forEach((type) => {
         const msg = smsService.buildMessage(type, testData);
         expect(typeof msg).toBe('string');
         expect(msg.length).toBeGreaterThan(0);
-        expect(msg.length).toBeLessThanOrEqual(160);
+        expect(msg.length).toBeLessThanOrEqual(306);
       });
     });
 
-    it('truncates messages over 160 characters', () => {
+    it('truncates messages over 306 characters', () => {
       const msg = smsService.buildMessage('event_confirmation', {
-        gameName: 'A Very Long Game Name That Goes On And On And On And Takes Up Lots Of Characters',
+        gameName: 'A Very Long Game Name That Goes On And On And On And Takes Up Lots Of Characters And Even More Characters To Really Push It Over The Limit Of Three Hundred And Six Characters Which Is Two GSM Seven Segments Worth Of Text Content In A Single Message Body Field',
         date: 'Saturday March 29th 2026 at 7:00 PM Eastern Standard Time',
-        actionUrl: 'https://nextgamenight.app/events/some-really-long-uuid-here'
+        actionUrl: 'https://nextgamenight.app/events/some-really-long-uuid-here-with-extra-path-segments/additional'
       });
-      expect(msg.length).toBeLessThanOrEqual(160);
+      expect(msg.length).toBeLessThanOrEqual(306);
       expect(msg).toMatch(/\.\.\.$/);
     });
 
@@ -149,6 +157,224 @@ describe('smsService', () => {
       process.env.TWILIO_ACCOUNT_SID = 'AC_TEST_SID';
       process.env.TWILIO_AUTH_TOKEN = 'test_auth_token';
       process.env.TWILIO_PHONE_NUMBER = '+15005550006';
+    });
+  });
+
+  // =============================================
+  // Event notification template tests (Phase 50)
+  // =============================================
+  describe('event notification templates', () => {
+
+    const baseData = {
+      eventName: 'Board Game Night',
+      groupName: 'Friday Gamers',
+      dateTime: 'Fri Apr 10 at 7pm',
+      eventUrl: 'https://nextgamenight.app/events/abc123',
+      rsvpPrompt: true,
+      timeUntil: 'tomorrow'
+    };
+
+    // --- event_created ---
+    describe('event_created', () => {
+
+      it('includes event name, group name, date/time, and event URL', () => {
+        const msg = smsService.buildMessage('event_created', baseData);
+        expect(msg).toContain('Board Game Night');
+        expect(msg).toContain('Friday Gamers');
+        expect(msg).toContain('Fri Apr 10 at 7pm');
+        expect(msg).toContain('https://nextgamenight.app/events/abc123');
+      });
+
+      it('includes RSVP prompt when rsvpPrompt is true', () => {
+        const msg = smsService.buildMessage('event_created', { ...baseData, rsvpPrompt: true });
+        expect(msg).toContain('Reply 1=Yes, 2=No, 3=Maybe');
+      });
+
+      it('omits RSVP prompt when rsvpPrompt is false', () => {
+        const msg = smsService.buildMessage('event_created', { ...baseData, rsvpPrompt: false });
+        expect(msg).not.toContain('Reply 1=Yes, 2=No, 3=Maybe');
+      });
+
+      it('uses casual tone (starts with "Hey!")', () => {
+        const msg = smsService.buildMessage('event_created', baseData);
+        expect(msg).toMatch(/^Hey!/);
+      });
+
+      it('stays within 306 characters', () => {
+        const msg = smsService.buildMessage('event_created', baseData);
+        expect(msg.length).toBeLessThanOrEqual(306);
+      });
+    });
+
+    // --- event_updated ---
+    describe('event_updated', () => {
+
+      it('includes event name, group name, date/time, and event URL', () => {
+        const msg = smsService.buildMessage('event_updated', baseData);
+        expect(msg).toContain('Board Game Night');
+        expect(msg).toContain('Friday Gamers');
+        expect(msg).toContain('Fri Apr 10 at 7pm');
+        expect(msg).toContain('https://nextgamenight.app/events/abc123');
+      });
+
+      it('does NOT include RSVP prompt', () => {
+        const msg = smsService.buildMessage('event_updated', { ...baseData, rsvpPrompt: true });
+        expect(msg).not.toContain('Reply 1=Yes, 2=No, 3=Maybe');
+      });
+
+      it('uses casual tone (starts with "Heads up")', () => {
+        const msg = smsService.buildMessage('event_updated', baseData);
+        expect(msg).toMatch(/^Heads up/);
+      });
+
+      it('stays within 306 characters', () => {
+        const msg = smsService.buildMessage('event_updated', baseData);
+        expect(msg.length).toBeLessThanOrEqual(306);
+      });
+    });
+
+    // --- event_cancelled ---
+    describe('event_cancelled', () => {
+
+      it('includes event name, group name, and date/time', () => {
+        const msg = smsService.buildMessage('event_cancelled', baseData);
+        expect(msg).toContain('Board Game Night');
+        expect(msg).toContain('Friday Gamers');
+        expect(msg).toContain('Fri Apr 10 at 7pm');
+      });
+
+      it('does NOT include event URL or RSVP prompt', () => {
+        const msg = smsService.buildMessage('event_cancelled', { ...baseData, rsvpPrompt: true });
+        expect(msg).not.toContain('https://nextgamenight.app/events/abc123');
+        expect(msg).not.toContain('Reply 1=Yes, 2=No, 3=Maybe');
+      });
+
+      it('uses casual tone (starts with "Bummer")', () => {
+        const msg = smsService.buildMessage('event_cancelled', baseData);
+        expect(msg).toMatch(/^Bummer/);
+      });
+
+      it('stays within 306 characters', () => {
+        const msg = smsService.buildMessage('event_cancelled', baseData);
+        expect(msg.length).toBeLessThanOrEqual(306);
+      });
+    });
+
+    // --- reminder (Phase 50 version with group name) ---
+    describe('reminder (event notification)', () => {
+
+      it('includes event name, group name, timeUntil, and event URL', () => {
+        const msg = smsService.buildMessage('reminder', baseData);
+        expect(msg).toContain('Board Game Night');
+        expect(msg).toContain('Friday Gamers');
+        expect(msg).toContain('tomorrow');
+        expect(msg).toContain('https://nextgamenight.app/events/abc123');
+      });
+
+      it('includes RSVP prompt when rsvpPrompt is true', () => {
+        const msg = smsService.buildMessage('reminder', { ...baseData, rsvpPrompt: true });
+        expect(msg).toContain('Reply 1=Yes, 2=No, 3=Maybe');
+      });
+
+      it('omits RSVP prompt when rsvpPrompt is false', () => {
+        const msg = smsService.buildMessage('reminder', { ...baseData, rsvpPrompt: false });
+        expect(msg).not.toContain('Reply 1=Yes, 2=No, 3=Maybe');
+      });
+
+      it('uses casual tone (starts with "Reminder:")', () => {
+        const msg = smsService.buildMessage('reminder', baseData);
+        expect(msg).toMatch(/^Reminder:/);
+      });
+
+      it('stays within 306 characters', () => {
+        const msg = smsService.buildMessage('reminder', baseData);
+        expect(msg.length).toBeLessThanOrEqual(306);
+      });
+    });
+
+    // --- Character budget with long realistic data ---
+    describe('character budget (long data)', () => {
+
+      const longData = {
+        eventName: 'Twilight Imperium Fourth Edition',
+        groupName: 'Portland Board Game Enthusiasts',
+        dateTime: 'Saturday March 29th at 7:00 PM',
+        eventUrl: 'https://nextgamenight.app/events/a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+        rsvpPrompt: true,
+        timeUntil: 'in 2 hours'
+      };
+
+      it('event_created with long data stays within 306 chars', () => {
+        const msg = smsService.buildMessage('event_created', longData);
+        expect(msg.length).toBeLessThanOrEqual(306);
+      });
+
+      it('event_updated with long data stays within 306 chars', () => {
+        const msg = smsService.buildMessage('event_updated', longData);
+        expect(msg.length).toBeLessThanOrEqual(306);
+      });
+
+      it('event_cancelled with long data stays within 306 chars', () => {
+        const msg = smsService.buildMessage('event_cancelled', longData);
+        expect(msg.length).toBeLessThanOrEqual(306);
+      });
+
+      it('reminder with long data stays within 306 chars', () => {
+        const msg = smsService.buildMessage('reminder', longData);
+        expect(msg.length).toBeLessThanOrEqual(306);
+      });
+    });
+  });
+
+  // =============================================
+  // sanitizeForSms tests (Phase 50)
+  // =============================================
+  describe('sanitizeForSms', () => {
+
+    let sanitizeForSms;
+
+    beforeAll(() => {
+      sanitizeForSms = require('../../utils/smsUtils').sanitizeForSms;
+    });
+
+    it('strips emoji from strings', () => {
+      expect(sanitizeForSms('Game Night 🎲')).toBe('Game Night');
+    });
+
+    it('replaces smart double quotes with straight quotes', () => {
+      expect(sanitizeForSms('\u201CHello\u201D')).toBe('"Hello"');
+    });
+
+    it('replaces smart single quotes with straight apostrophes', () => {
+      expect(sanitizeForSms('\u2018don\u2019t')).toBe("'don't");
+    });
+
+    it('replaces em dashes with hyphens', () => {
+      expect(sanitizeForSms('Game\u2014Night')).toBe('Game-Night');
+    });
+
+    it('replaces en dashes with hyphens', () => {
+      expect(sanitizeForSms('Game\u2013Night')).toBe('Game-Night');
+    });
+
+    it('passes through plain ASCII unchanged', () => {
+      expect(sanitizeForSms('Board Game Night 2026')).toBe('Board Game Night 2026');
+    });
+
+    it('handles null input gracefully', () => {
+      expect(sanitizeForSms(null)).toBe('');
+    });
+
+    it('handles undefined input gracefully', () => {
+      expect(sanitizeForSms(undefined)).toBe('');
+    });
+
+    it('handles empty string input', () => {
+      expect(sanitizeForSms('')).toBe('');
+    });
+
+    it('trims whitespace', () => {
+      expect(sanitizeForSms('  hello  ')).toBe('hello');
     });
   });
 
