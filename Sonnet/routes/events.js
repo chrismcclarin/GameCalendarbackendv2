@@ -656,7 +656,7 @@ router.put('/:id', validateUUID('id'), validateEventUpdate, async (req, res) => 
     const dateChanged = start_date && String(oldStartDate) !== String(start_date);
     const isFutureEvent = start_date && new Date(start_date) > new Date();
 
-    if (dateChanged && isFutureEvent && emailService.isConfigured()) {
+    if (dateChanged && isFutureEvent) {
       try {
         // Find members who RSVPed yes or maybe
         const rsvpMembers = await EventRsvp.findAll({
@@ -666,22 +666,34 @@ router.put('/:id', validateUUID('id'), validateEventUpdate, async (req, res) => 
           },
           include: [{
             model: User,
-            attributes: ['id', 'user_id', 'username', 'email', 'email_notifications_enabled'],
+            attributes: ['id', 'user_id', 'username', 'email', 'email_notifications_enabled', 'sms_enabled', 'phone', 'notification_preferences'],
           }],
         });
 
-        const dateChangeRecipients = rsvpMembers
-          .filter(r => r.User && r.User.email &&
-            r.User.email_notifications_enabled !== false &&
-            !r.User.email.includes('@auth0.local') &&
-            !r.User.email.includes('@auth0'))
-          .map(r => ({
-            email: r.User.email,
-            name: r.User.username,
-            user_id: r.User.user_id,
-          }));
+        const rsvpUsers = rsvpMembers.filter(r => r.User).map(r => r.User);
 
-        if (dateChangeRecipients.length > 0) {
+        // Email recipients: RSVP'd users with valid email (matches current behavior)
+        const emailUpdateRecipients = rsvpUsers.filter(user => {
+          const hasValidEmail = user.email && !user.email.includes('@auth0.local') && !user.email.includes('@auth0');
+          return hasValidEmail && user.email_notifications_enabled !== false;
+        });
+
+        // SMS recipients: RSVP'd users with SMS enabled
+        const smsUpdateRecipients = rsvpUsers.filter(user => user.sms_enabled && user.phone);
+
+        // Merge (same dedup pattern as event creation)
+        const updateRecipientMap = new Map();
+        emailUpdateRecipients.forEach(u => updateRecipientMap.set(u.user_id, { ...u.dataValues, _emailEligible: true }));
+        smsUpdateRecipients.forEach(u => {
+          if (updateRecipientMap.has(u.user_id)) {
+            updateRecipientMap.get(u.user_id)._smsEligible = true;
+          } else {
+            updateRecipientMap.set(u.user_id, { ...u.dataValues, _smsEligible: true });
+          }
+        });
+        const updateRecipients = Array.from(updateRecipientMap.values());
+
+        if (updateRecipients.length > 0) {
           const frontendUrl = process.env.FRONTEND_URL || process.env.AUTH0_BASE_URL || 'http://localhost:3000';
           const eventUrl = `${frontendUrl}/group/${event.group_id}/event/${event.id}`;
           const game = updatedEvent.Game || await Game.findByPk(event.game_id, { attributes: ['name'] });
@@ -691,39 +703,61 @@ router.put('/:id', validateUUID('id'), validateEventUpdate, async (req, res) => 
             hour: '2-digit', minute: '2-digit', hour12: false,
           });
 
-          const emailPromises = dateChangeRecipients.map(recipient => {
-            const rsvpUrls = {
-              yesUrl: generateRsvpUrl(frontendUrl, event.id, recipient.user_id, 'yes'),
-              maybeUrl: generateRsvpUrl(frontendUrl, event.id, recipient.user_id, 'maybe'),
-              noUrl: generateRsvpUrl(frontendUrl, event.id, recipient.user_id, 'no'),
-            };
-
-            const { html, text } = emailService.generateDateChangeEmailTemplate({
-              gameName: game?.name || 'Game Session',
-              groupName: group?.name || '',
-              newDate: start_date,
-              newTime,
-              durationMinutes: duration_minutes || event.duration_minutes || 60,
-              eventUrl,
-              recipientName: recipient.name,
-              rsvpUrls,
-            });
-
-            return emailService.send({
-              to: recipient.email,
-              subject: `Date Changed: ${game?.name || 'Game Session'} - ${group?.name || ''}`,
-              html,
-              text,
-              groupName: group?.name,
-            });
+          // Format dateTime for SMS templates
+          const formattedNewDateTime = newEventDate.toLocaleDateString('en-US', {
+            weekday: 'short',
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true
           });
 
-          Promise.allSettled(emailPromises)
-            .then(results => {
-              const successful = results.filter(r => r.status === 'fulfilled' && r.value?.success).length;
-              console.log(`Date-change notifications sent: ${successful}/${results.length}`);
-            })
-            .catch(err => console.error('Date-change notification error (non-fatal):', err.message));
+          const notifyPromises = notificationService.sendToMany(updateRecipients, 'event_updated', (user) => {
+            // emailParams: ONLY set for email-eligible users
+            let emailParams = null;
+            if (user._emailEligible && user.email) {
+              const rsvpUrls = {
+                yesUrl: generateRsvpUrl(frontendUrl, event.id, user.user_id, 'yes'),
+                maybeUrl: generateRsvpUrl(frontendUrl, event.id, user.user_id, 'maybe'),
+                noUrl: generateRsvpUrl(frontendUrl, event.id, user.user_id, 'no'),
+              };
+
+              const { html, text } = emailService.generateDateChangeEmailTemplate({
+                gameName: game?.name || 'Game Session',
+                groupName: group?.name || '',
+                newDate: start_date,
+                newTime,
+                durationMinutes: duration_minutes || event.duration_minutes || 60,
+                eventUrl,
+                recipientName: user.username,
+                rsvpUrls,
+              });
+
+              emailParams = {
+                to: user.email,
+                subject: `Date Changed: ${game?.name || 'Game Session'} - ${group?.name || ''}`,
+                html,
+                text,
+                groupName: group?.name || ''
+              };
+            }
+
+            return {
+              emailParams,
+              data: {
+                eventName: game?.name || 'Game Night',
+                groupName: group?.name || '',
+                dateTime: formattedNewDateTime,
+                eventUrl,
+                rsvpPrompt: false  // update SMS does NOT include RSVP prompt
+              }
+            };
+          });
+
+          Promise.allSettled([notifyPromises]).catch(err => {
+            console.error('Error sending update notifications (non-fatal):', err.message);
+          });
         }
       } catch (dateChangeError) {
         console.error('Error sending date-change notifications (non-fatal):', dateChangeError.message);
@@ -881,65 +915,98 @@ router.delete('/:id', async (req, res) => {
       return res.status(403).json({ error: 'Only group owners and admins can delete events' });
     }
 
-    // Send cancellation email to members who RSVPed yes or maybe (before deleting data)
+    // Send cancellation notifications to members who RSVPed yes or maybe (before deleting data)
     try {
-      if (emailService.isConfigured()) {
-        const rsvpMembers = await EventRsvp.findAll({
-          where: {
-            event_id: event.id,
-            status: { [Op.in]: ['yes', 'maybe'] },
-          },
-          include: [{
-            model: User,
-            attributes: ['id', 'user_id', 'username', 'email', 'email_notifications_enabled'],
-          }],
+      const rsvpMembers = await EventRsvp.findAll({
+        where: {
+          event_id: event.id,
+          status: { [Op.in]: ['yes', 'maybe'] },
+        },
+        include: [{
+          model: User,
+          attributes: ['id', 'user_id', 'username', 'email', 'email_notifications_enabled', 'sms_enabled', 'phone', 'notification_preferences'],
+        }],
+      });
+
+      const rsvpUsers = rsvpMembers.filter(r => r.User).map(r => r.User);
+
+      // Email recipients: RSVP'd users with valid email (matches current behavior)
+      const emailCancelRecipients = rsvpUsers.filter(user => {
+        const hasValidEmail = user.email && !user.email.includes('@auth0.local') && !user.email.includes('@auth0');
+        return hasValidEmail && user.email_notifications_enabled !== false;
+      });
+
+      // SMS recipients: RSVP'd users with SMS enabled
+      const smsCancelRecipients = rsvpUsers.filter(user => user.sms_enabled && user.phone);
+
+      // Merge (same dedup pattern)
+      const cancelRecipientMap = new Map();
+      emailCancelRecipients.forEach(u => cancelRecipientMap.set(u.user_id, { ...u.dataValues, _emailEligible: true }));
+      smsCancelRecipients.forEach(u => {
+        if (cancelRecipientMap.has(u.user_id)) {
+          cancelRecipientMap.get(u.user_id)._smsEligible = true;
+        } else {
+          cancelRecipientMap.set(u.user_id, { ...u.dataValues, _smsEligible: true });
+        }
+      });
+      const cancellationRecipients = Array.from(cancelRecipientMap.values());
+
+      if (cancellationRecipients.length > 0) {
+        const frontendUrl = process.env.FRONTEND_URL || process.env.AUTH0_BASE_URL || 'http://localhost:3000';
+        const game = await Game.findByPk(event.game_id, { attributes: ['name'] });
+        const group = await Group.findByPk(event.group_id, { attributes: ['id', 'name'] });
+        const groupUrl = `${frontendUrl}/groupHomePage?id=${group?.id || event.group_id}`;
+
+        // Format dateTime for SMS templates
+        const cancelDate = new Date(event.start_date);
+        const formattedCancelDateTime = cancelDate.toLocaleDateString('en-US', {
+          weekday: 'short',
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: true
         });
 
-        const cancellationRecipients = rsvpMembers
-          .filter(r => r.User && r.User.email &&
-            r.User.email_notifications_enabled !== false &&
-            !r.User.email.includes('@auth0.local') &&
-            !r.User.email.includes('@auth0'))
-          .map(r => ({
-            email: r.User.email,
-            name: r.User.username,
-          }));
-
-        if (cancellationRecipients.length > 0) {
-          const frontendUrl = process.env.FRONTEND_URL || process.env.AUTH0_BASE_URL || 'http://localhost:3000';
-          const game = await Game.findByPk(event.game_id, { attributes: ['name'] });
-          const group = await Group.findByPk(event.group_id, { attributes: ['id', 'name'] });
-          const groupUrl = `${frontendUrl}/groupHomePage?id=${group?.id || event.group_id}`;
-
-          const emailPromises = cancellationRecipients.map(recipient => {
+        const notifyPromises = notificationService.sendToMany(cancellationRecipients, 'event_cancelled', (user) => {
+          // emailParams: ONLY set for email-eligible users
+          let emailParams = null;
+          if (user._emailEligible && user.email) {
             const { html, text } = emailService.generateCancellationEmailTemplate({
               gameName: game?.name || 'Game Session',
               groupName: group?.name || '',
               eventDate: event.start_date,
-              recipientName: recipient.name,
+              recipientName: user.username,
               groupUrl,
             });
 
-            return emailService.send({
-              to: recipient.email,
+            emailParams = {
+              to: user.email,
               subject: `Cancelled: ${game?.name || 'Game Session'} - ${group?.name || ''}`,
               html,
               text,
-              groupName: group?.name,
-            });
-          });
+              groupName: group?.name || ''
+            };
+          }
 
-          // Fire-and-forget: don't block deletion on email sends
-          Promise.allSettled(emailPromises)
-            .then(results => {
-              const successful = results.filter(r => r.status === 'fulfilled' && r.value?.success).length;
-              console.log(`Cancellation notifications sent: ${successful}/${results.length}`);
-            })
-            .catch(err => console.error('Cancellation notification error (non-fatal):', err.message));
-        }
+          return {
+            emailParams,
+            data: {
+              eventName: game?.name || 'Game Night',
+              groupName: group?.name || '',
+              dateTime: formattedCancelDateTime,
+              rsvpPrompt: false  // cancellation SMS does NOT include RSVP prompt
+            }
+          };
+        });
+
+        // Fire-and-forget: don't block deletion on notification sends
+        Promise.allSettled([notifyPromises]).catch(err => {
+          console.error('Error sending cancellation notifications (non-fatal):', err.message);
+        });
       }
-    } catch (cancelEmailError) {
-      console.error('Error sending cancellation notifications (non-fatal):', cancelEmailError.message);
+    } catch (cancelNotifyError) {
+      console.error('Error sending cancellation notifications (non-fatal):', cancelNotifyError.message);
     }
 
     // Delete RSVPs for this event
