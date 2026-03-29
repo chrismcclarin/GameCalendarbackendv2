@@ -31,6 +31,11 @@ const EventRsvp = sequelize.define('EventRsvp', {
     type: DataTypes.TEXT,
     allowNull: true,
   },
+  reminder_sent_at: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    defaultValue: null,
+  },
 }, {
   timestamps: true,
   indexes: [
