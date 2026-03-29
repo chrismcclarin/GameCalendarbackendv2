@@ -226,6 +226,10 @@ app.use((req, res, next) => {
 // 3. Request body parsing with size limit
 app.use(express.json({ limit: '10mb', verify: (req, _res, buf) => { req.rawBody = buf; } })); // Limit request body size
 
+// URL-encoded body parsing scoped to Twilio webhook routes only
+// Twilio sends inbound SMS data as application/x-www-form-urlencoded
+app.use('/api/webhooks/twilio', express.urlencoded({ extended: false }));
+
 // 4. Request logging for security auditing
 app.use(requestLogger);
 

@@ -1,9 +1,13 @@
 // routes/webhooks.js
-// Webhook handlers for external service callbacks (SendGrid delivery events)
+// Webhook handlers for external service callbacks (SendGrid delivery events, Twilio inbound SMS)
 const express = require('express');
 const crypto = require('crypto');
+const twilio = require('twilio');
+const { Op } = require('sequelize');
 const router = express.Router();
-const { EmailMetrics } = require('../models');
+const { EmailMetrics, User, Event, EventRsvp, SentNotification, Game } = require('../models');
+const { parseReply } = require('../services/smsReplyParser');
+const { smsInboundLimiter } = require('../middleware/rateLimiter');
 
 /**
  * Verify SendGrid webhook signature using ECDSA
@@ -209,5 +213,118 @@ function maskEmail(email) {
     return 'unknown';
   }
 }
+
+// ============================================================
+// Twilio Inbound SMS Webhook
+// ============================================================
+
+/**
+ * Twilio signature validation middleware.
+ * In production, validates X-Twilio-Signature using TWILIO_AUTH_TOKEN.
+ * In non-production, validation is skipped automatically.
+ * twilio.webhook() handles URL reconstruction and protocol detection internally,
+ * avoiding proxy pitfalls (RESEARCH.md Pitfall 2).
+ */
+const twilioWebhookValidation = twilio.webhook({ validate: process.env.NODE_ENV === 'production' });
+
+/**
+ * Handle inbound SMS replies from Twilio.
+ * Users RSVP to events by replying to SMS notifications they received.
+ *
+ * Flow:
+ * 1. Look up user by phone number
+ * 2. Parse reply text (RSVP yes/no/maybe, opt-out, or unknown)
+ * 3. Resolve target event via most recent SentNotification
+ * 4. Upsert EventRsvp record
+ * 5. Return TwiML auto-reply with confirmation
+ *
+ * POST /api/webhooks/twilio/sms
+ */
+router.post('/twilio/sms', smsInboundLimiter, twilioWebhookValidation, async (req, res) => {
+  try {
+    const { From, Body } = req.body;
+
+    // 1. Look up user by phone number
+    const user = await User.findOne({ where: { phone: From } });
+    if (!user) {
+      // Unknown phone number -- silent ignore (no response)
+      return res.type('text/xml').send('<Response/>');
+    }
+
+    // 2. Parse the reply text
+    const parsed = parseReply(Body);
+
+    // 3. Handle by parsed type
+    const twiml = new twilio.twiml.MessagingResponse();
+
+    // Opt-out: disable SMS and confirm
+    if (parsed.type === 'opt_out') {
+      user.sms_enabled = false;
+      await user.save();
+      twiml.message("You've been unsubscribed from SMS notifications. You can re-enable SMS in your profile.");
+      return res.type('text/xml').send(twiml.toString());
+    }
+
+    // Unknown text: send help message
+    if (parsed.type === 'unknown') {
+      twiml.message('Reply 1=Yes, 2=No, 3=Maybe to RSVP. Reply STOP to opt out.');
+      return res.type('text/xml').send(twiml.toString());
+    }
+
+    // RSVP: resolve event via most recent SentNotification
+    const notification = await SentNotification.findOne({
+      where: { phone: From, channel: 'sms' },
+      include: [{
+        model: Event,
+        where: { status: { [Op.ne]: 'cancelled' } },
+        include: [{ model: Game, attributes: ['name'] }],
+        required: true,
+      }],
+      order: [['sent_at', 'DESC']],
+    });
+
+    if (!notification) {
+      twiml.message('No upcoming events to RSVP for right now.');
+      return res.type('text/xml').send(twiml.toString());
+    }
+
+    // Check for stale event (already passed)
+    const eventDate = new Date(notification.Event.start_date);
+    if (eventDate < new Date()) {
+      const frontendUrl = process.env.FRONTEND_URL || 'https://nextgamenight.app';
+      twiml.message(`That event has already passed. Check the app for upcoming events: ${frontendUrl}`);
+      return res.type('text/xml').send(twiml.toString());
+    }
+
+    // 4. RSVP upsert (matching existing pattern from routes/rsvp.js)
+    const existing = await EventRsvp.findOne({
+      where: { event_id: notification.Event.id, user_id: user.user_id },
+    });
+
+    if (existing) {
+      await existing.update({ status: parsed.status });
+    } else {
+      await EventRsvp.create({
+        event_id: notification.Event.id,
+        user_id: user.user_id,
+        status: parsed.status,
+      });
+    }
+
+    // 5. Build confirmation TwiML
+    const statusLabel = parsed.status.charAt(0).toUpperCase() + parsed.status.slice(1);
+    const eventName = notification.Event.Game ? notification.Event.Game.name : 'Game Night';
+    const dateStr = eventDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const eventUrl = `${process.env.FRONTEND_URL || 'https://nextgamenight.app'}/groupHomePage/${notification.Event.group_id}`;
+
+    twiml.message(`RSVP recorded: ${statusLabel} for ${eventName} (${dateStr}). ${eventUrl}`);
+    return res.type('text/xml').send(twiml.toString());
+
+  } catch (error) {
+    console.error('[Webhooks] Twilio inbound SMS error:', error);
+    // Never expose errors to SMS sender -- return empty TwiML
+    return res.type('text/xml').send('<Response/>');
+  }
+});
 
 module.exports = router;

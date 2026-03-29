@@ -99,6 +99,21 @@ const writeOperationLimiter = (req, res, next) => {
   next();
 };
 
+// SMS inbound webhook rate limiter (per phone number)
+// 10 replies per phone per hour -- excess silently dropped (empty TwiML)
+const smsInboundLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,  // 1 hour
+  max: 10,                    // 10 replies per phone per hour
+  keyGenerator: (req) => `sms-inbound:${req.body && req.body.From ? req.body.From : 'unknown'}`,
+  handler: (req, res) => {
+    // Silent drop -- return empty TwiML (never expose rate limit info to SMS sender)
+    res.type('text/xml').send('<Response/>');
+  },
+  skip: (req) => isDevelopment && (req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1'),
+  // Disable IP-based key validation since we use phone number as key
+  validate: { default: true, keyGeneratorIpFallback: false },
+});
+
 module.exports = {
   apiLimiter,
   authLimiter,
@@ -106,5 +121,6 @@ module.exports = {
   strictLimiter,
   writeOperationLimiter,
   magicTokenLimiter,
+  smsInboundLimiter,
 };
 
