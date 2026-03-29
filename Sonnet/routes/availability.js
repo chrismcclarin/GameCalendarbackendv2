@@ -341,6 +341,85 @@ router.get('/group/:group_id/overlaps',
   }
 );
 
+// Get heatmap data for group availability (normalized 1-hour slots, 12pm-11pm)
+router.get('/group/:group_id/heatmap',
+  validateUUID('group_id'),
+  async (req, res) => {
+    try {
+      const userId = req.user?.user_id;
+      if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+
+      // Verify user is a member of the group
+      const { Group, UserGroup } = require('../models');
+      let userGroup;
+      try {
+        userGroup = await UserGroup.findOne({
+          where: {
+            group_id: req.params.group_id,
+            user_id: userId,
+            status: 'active',
+          },
+        });
+      } catch (dbError) {
+        console.error('Database error checking group membership:', dbError);
+        return sendSafeError(res, 500, dbError, 'Error checking group membership');
+      }
+
+      if (!userGroup) {
+        return res.status(403).json({ error: 'Forbidden: You must be a member of this group' });
+      }
+
+      // Parse query params
+      const timezone = req.query.timezone || 'UTC';
+
+      // Default week_start to current Monday if not provided
+      let weekStartDate;
+      if (req.query.week_start) {
+        weekStartDate = new Date(req.query.week_start + 'T00:00:00Z');
+        if (isNaN(weekStartDate.getTime())) {
+          return res.status(400).json({ error: 'Invalid week_start date format. Use ISO 8601 format (YYYY-MM-DD)' });
+        }
+      } else {
+        // Default to Monday of current week
+        const now = new Date();
+        const dayOfWeek = now.getUTCDay(); // 0=Sun, 1=Mon
+        const diff = dayOfWeek === 0 ? -6 : 1 - dayOfWeek; // Days to subtract to get to Monday
+        weekStartDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + diff));
+      }
+
+      // Validate week_start is a Monday
+      if (weekStartDate.getUTCDay() !== 1) {
+        return res.status(400).json({ error: 'week_start must be a Monday' });
+      }
+
+      // Validate week_start is within allowed range (2 weeks past, 4 weeks future from current Monday)
+      const now = new Date();
+      const currentDayOfWeek = now.getUTCDay();
+      const diffToMonday = currentDayOfWeek === 0 ? -6 : 1 - currentDayOfWeek;
+      const currentMonday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + diffToMonday));
+
+      const diffMs = weekStartDate.getTime() - currentMonday.getTime();
+      const diffWeeks = diffMs / (7 * 24 * 60 * 60 * 1000);
+
+      if (diffWeeks < -2) {
+        return res.status(400).json({ error: 'week_start cannot be more than 2 weeks in the past' });
+      }
+      if (diffWeeks > 4) {
+        return res.status(400).json({ error: 'week_start cannot be more than 4 weeks in the future' });
+      }
+
+      const weekStartStr = weekStartDate.toISOString().split('T')[0];
+      const result = await availabilityService.getGroupHeatmap(req.params.group_id, weekStartStr, timezone);
+
+      res.json(result);
+    } catch (error) {
+      sendSafeError(res, 500, error, 'Error generating group heatmap');
+    }
+  }
+);
+
 // Get user's availability patterns (for editing/deleting)
 router.get('/user/:user_id/patterns',
   validateAuth0UserId('user_id'),
