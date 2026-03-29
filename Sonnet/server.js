@@ -68,6 +68,8 @@ const suggestionRoutes = require('./routes/suggestions');
 const { deadlineJob } = require('./schedulers/deadlineScheduler');
 // Scheduler for auto-promoting pending members after 24h
 const { autoPromotionJob } = require('./schedulers/autoPromotionScheduler');
+// Scheduler for SMS reminders before upcoming events
+const { reminderJob } = require('./schedulers/reminderScheduler');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -420,6 +422,16 @@ const startServer = async () => {
           console.log('Auto-promotion scheduler started (every 15 min)');
         } catch (err) {
           console.error('Auto-promotion scheduler failed to start:', err.message);
+        }
+      }
+
+      // Start reminder scheduler (SMS reminders for upcoming events)
+      if (process.env.NODE_ENV === 'production' || process.env.ENABLE_SCHEDULER === 'true') {
+        try {
+          reminderJob.start();
+          console.log('Reminder scheduler started (every 5 min, SMS reminders)');
+        } catch (err) {
+          console.error('Reminder scheduler failed to start:', err.message);
         }
       }
 
