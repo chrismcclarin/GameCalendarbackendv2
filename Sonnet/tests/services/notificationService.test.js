@@ -278,4 +278,101 @@ describe('notificationService', () => {
       expect(results.sms).toEqual({ success: false, error: 'Twilio rate limit' });
     });
   });
+
+  // =============================================
+  // sendToMany tests (Phase 50)
+  // =============================================
+  describe('sendToMany', () => {
+
+    beforeEach(() => {
+      jest.clearAllMocks();
+    });
+
+    it('dispatches to all users and returns per-user results', async () => {
+      const users = [
+        {
+          user_id: 'user-1',
+          email_notifications_enabled: true,
+          sms_enabled: false,
+          phone: null,
+          notification_preferences: { event_created: { email: true } }
+        },
+        {
+          user_id: 'user-2',
+          email_notifications_enabled: false,
+          sms_enabled: true,
+          phone: '+14155551111',
+          notification_preferences: { event_created: { sms: true } }
+        },
+        {
+          user_id: 'user-3',
+          email_notifications_enabled: true,
+          sms_enabled: true,
+          phone: '+14155552222',
+          notification_preferences: { event_created: { email: true, sms: true } }
+        }
+      ];
+
+      emailService.send.mockResolvedValue({ success: true, id: 'msg_100' });
+      smsService.send.mockResolvedValue({ success: true, sid: 'SM_200' });
+
+      const payloadBuilder = (user) => ({
+        emailParams: { to: `${user.user_id}@test.com`, subject: 'Event', html: '<p>hi</p>' },
+        data: { eventName: 'Game Night', groupName: 'Gamers', dateTime: 'Friday' }
+      });
+
+      const results = await notificationService.sendToMany(users, 'event_created', payloadBuilder);
+
+      expect(results).toHaveLength(3);
+      expect(results.find(r => r.userId === 'user-1')).toBeDefined();
+      expect(results.find(r => r.userId === 'user-2')).toBeDefined();
+      expect(results.find(r => r.userId === 'user-3')).toBeDefined();
+    });
+
+    it('handles partial failures gracefully', async () => {
+      const users = [
+        {
+          user_id: 'user-ok',
+          email_notifications_enabled: true,
+          sms_enabled: true,
+          phone: '+14155551111',
+          notification_preferences: { event_created: { sms: true } }
+        },
+        {
+          user_id: 'user-fail',
+          email_notifications_enabled: true,
+          sms_enabled: true,
+          phone: '+14155552222',
+          notification_preferences: { event_created: { sms: true } }
+        }
+      ];
+
+      emailService.send.mockResolvedValue({ success: true, id: 'msg_ok' });
+      // smsService.send succeeds for first call, fails for second
+      smsService.send
+        .mockResolvedValueOnce({ success: true, sid: 'SM_OK' })
+        .mockRejectedValueOnce(new Error('Twilio timeout'));
+
+      const payloadBuilder = (user) => ({
+        emailParams: { to: `${user.user_id}@test.com`, subject: 'Event', html: '<p>hi</p>' },
+        data: { eventName: 'Game Night', groupName: 'Gamers', dateTime: 'Friday' }
+      });
+
+      // Should not throw
+      const results = await notificationService.sendToMany(users, 'event_created', payloadBuilder);
+
+      expect(results).toHaveLength(2);
+      const okResult = results.find(r => r.userId === 'user-ok');
+      const failResult = results.find(r => r.userId === 'user-fail');
+      expect(okResult).toBeDefined();
+      expect(failResult).toBeDefined();
+      // The fail user's sms result should show the error (caught by send())
+      expect(failResult.sms).toEqual({ success: false, error: 'Twilio timeout' });
+    });
+
+    it('works with empty users array', async () => {
+      const results = await notificationService.sendToMany([], 'event_created', () => ({}));
+      expect(results).toEqual([]);
+    });
+  });
 });

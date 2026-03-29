@@ -91,6 +91,28 @@ class NotificationService {
 
     return results;
   }
+  /**
+   * Send a notification to multiple users in parallel.
+   * Uses send() per user so each gets proper preference routing and error isolation.
+   *
+   * @param {Array<Object>} users - Array of user model instances
+   * @param {string} type - Notification type key
+   * @param {Function} payloadBuilder - (user) => payload object for send()
+   * @returns {Promise<Array<{userId: string, email: Object|null, sms: Object|null}>>}
+   */
+  async sendToMany(users, type, payloadBuilder) {
+    if (!users || users.length === 0) return [];
+
+    const results = [];
+    const promises = users.map(async (user) => {
+      const payload = payloadBuilder(user);
+      const result = await this.send(user, type, payload);
+      results.push({ userId: user.user_id, ...result });
+      return result;
+    });
+    await Promise.allSettled(promises);
+    return results;
+  }
 }
 
 // Singleton export (matches emailService/smsService pattern)
