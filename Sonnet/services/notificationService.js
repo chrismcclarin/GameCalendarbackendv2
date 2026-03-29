@@ -65,8 +65,8 @@ class NotificationService {
   async send(user, type, payload) {
     const results = { email: null, sms: null };
 
-    // Email channel
-    if (this.getPreference(user, type, 'email')) {
+    // Email channel -- guard against null emailParams (SMS-only recipients)
+    if (payload.emailParams && payload.emailParams.to && this.getPreference(user, type, 'email')) {
       try {
         results.email = await this.emailService.send(payload.emailParams);
       } catch (error) {

@@ -7,6 +7,7 @@ const router = express.Router();
 const auth0Service = require('../services/auth0Service');
 const googleCalendarService = require('../services/googleCalendarService');
 const emailService = require('../services/emailService');
+const notificationService = require('../services/notificationService');
 const { generateRsvpUrl } = require('./rsvp');
 
 // Helper function to format event with custom participants
@@ -394,7 +395,7 @@ router.post('/', validateEventCreate, async (req, res) => {
       const group = await Group.findByPk(group_id, {
         include: [{
           model: User,
-          attributes: ['id', 'user_id', 'username', 'email', 'email_notifications_enabled', 'google_calendar_token', 'google_calendar_refresh_token', 'google_calendar_enabled'],
+          attributes: ['id', 'user_id', 'username', 'email', 'email_notifications_enabled', 'google_calendar_token', 'google_calendar_refresh_token', 'google_calendar_enabled', 'sms_enabled', 'phone', 'notification_preferences'],
           through: { where: { status: 'active' }, attributes: ['role'] }
         }]
       });
@@ -440,37 +441,43 @@ router.post('/', validateEventCreate, async (req, res) => {
           }
         }
         
-        // Send email notifications to event participants only
-        // Only send to users who have email_notifications_enabled = true
-        // Exclude custom/temporary participants (they don't have user_id)
+        // Send notifications (email + SMS) through unified dispatch
         try {
           // Get participant user IDs from EventParticipations
           const participantUserIds = completeEvent.EventParticipations
-            .filter(ep => ep.User && ep.User.id) // Only include participants with User data
+            .filter(ep => ep.User && ep.User.id)
             .map(ep => ep.User.id);
-          
-          // Get participant user details from group members
-          const recipients = group.Users
-            .filter(user => {
-              // Only send to:
-              // 1. Users who are participants in this event (user.id in participantUserIds)
-              // 2. Valid email address
-              // 3. Email notifications enabled (defaults to true if not set)
-              // 4. Email is not @auth0.local (invalid email)
-              return participantUserIds.includes(user.id) &&
-                     user.email && 
-                     user.email_notifications_enabled !== false &&
-                     !user.email.includes('@auth0.local') &&
-                     !user.email.includes('@auth0');
-            })
-            .map(user => ({
-              email: user.email,
-              name: user.username,
-              user_id: user.user_id
-            }));
-          
-          if (recipients.length > 0 && emailService.isConfigured()) {
-            // Format start time from start_date
+
+          // Population 1: Email recipients -- MUST match current behavior exactly
+          // Only users who are event participants AND have valid email
+          const emailRecipients = group.Users.filter(user => {
+            const isParticipant = participantUserIds.includes(user.id);
+            const hasValidEmail = user.email && !user.email.includes('@auth0.local') && !user.email.includes('@auth0');
+            return isParticipant && hasValidEmail && user.email_notifications_enabled !== false;
+          });
+
+          // Population 2: SMS recipients -- all group members with SMS enabled (for creation)
+          const smsRecipients = group.Users.filter(user => {
+            return user.sms_enabled && user.phone;
+          });
+
+          // Merge into unified recipient list (deduplicated by user_id)
+          const recipientMap = new Map();
+          emailRecipients.forEach(u => recipientMap.set(u.user_id, { ...u.dataValues, _emailEligible: true }));
+          smsRecipients.forEach(u => {
+            if (recipientMap.has(u.user_id)) {
+              recipientMap.get(u.user_id)._smsEligible = true;
+            } else {
+              recipientMap.set(u.user_id, { ...u.dataValues, _smsEligible: true });
+            }
+          });
+          const recipients = Array.from(recipientMap.values());
+
+          if (recipients.length > 0) {
+            const frontendUrl = process.env.FRONTEND_URL || process.env.AUTH0_BASE_URL || 'http://localhost:3000';
+            const eventUrl = `${frontendUrl}/group/${group_id}/event/${event.id}`;
+
+            // Format start time for email templates
             const eventDate = new Date(start_date);
             const startTime = eventDate.toLocaleTimeString('en-US', {
               hour: '2-digit',
@@ -478,64 +485,71 @@ router.post('/', validateEventCreate, async (req, res) => {
               hour12: false
             });
 
-            // Build event URL (assuming event detail page exists)
-            // Use event.id which is available after creation
-            const frontendUrl = process.env.FRONTEND_URL || process.env.AUTH0_BASE_URL || 'http://localhost:3000';
-            const eventUrl = `${frontendUrl}/group/${group_id}/event/${event.id}`;
-
-            // Send personalized emails per recipient with RSVP magic link URLs
-            // Each recipient gets unique HMAC-signed RSVP buttons
-            const emailPromises = recipients.map(recipient => {
-              const rsvpUrls = {
-                yesUrl: generateRsvpUrl(frontendUrl, event.id, recipient.user_id, 'yes'),
-                maybeUrl: generateRsvpUrl(frontendUrl, event.id, recipient.user_id, 'maybe'),
-                noUrl: generateRsvpUrl(frontendUrl, event.id, recipient.user_id, 'no'),
-              };
-
-              const eventDataForEmail = {
-                gameName: game?.name || 'Game Night',
-                groupName: group.name,
-                startDate: start_date,
-                startTime: startTime,
-                durationMinutes: duration_minutes || 60,
-                location: null,
-                comments: comments || null,
-                eventUrl: eventUrl,
-                rsvpUrls,
-              };
-
-              return emailService.sendGameSessionNotification(
-                recipient.email,
-                recipient.name,
-                eventDataForEmail
-              );
+            // Format dateTime for SMS templates
+            const formattedDateTime = eventDate.toLocaleDateString('en-US', {
+              weekday: 'short',
+              month: 'short',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: true
             });
 
-            // Fire-and-forget: send all emails in parallel, don't block event creation
-            Promise.allSettled(emailPromises)
-              .then(results => {
-                const successful = results.filter(r => r.status === 'fulfilled' && r.value?.success).length;
-                const failed = results.length - successful;
-                if (process.env.NODE_ENV === 'development' || failed > 0) {
-                  console.log(`Email notifications sent: ${successful}/${results.length} successful`);
-                  if (failed > 0) {
-                    console.error('Failed email count:', failed);
-                  }
+            const notifyPromises = notificationService.sendToMany(recipients, 'event_created', (user) => {
+              const rsvpUrls = {
+                yesUrl: generateRsvpUrl(frontendUrl, event.id, user.user_id, 'yes'),
+                maybeUrl: generateRsvpUrl(frontendUrl, event.id, user.user_id, 'maybe'),
+                noUrl: generateRsvpUrl(frontendUrl, event.id, user.user_id, 'no'),
+              };
+
+              // emailParams: ONLY set when this user is email-eligible (participant with valid email)
+              // Setting emailParams to null prevents notificationService from attempting email send
+              let emailParams = null;
+              if (user._emailEligible && user.email) {
+                const { html, text } = emailService.generateGameSessionEmailTemplate({
+                  gameName: game?.name || 'Game Night',
+                  groupName: group.name,
+                  startDate: start_date,
+                  startTime: startTime,
+                  durationMinutes: duration_minutes || 60,
+                  location: null,
+                  comments: comments || null,
+                  eventUrl,
+                  recipientName: user.username,
+                  rsvpUrls,
+                });
+
+                emailParams = {
+                  to: user.email,
+                  subject: `New Game Session: ${game?.name || 'Game Night'} - ${group.name}`,
+                  html,
+                  text,
+                  groupName: group.name
+                };
+              }
+
+              return {
+                emailParams,
+                data: {
+                  eventName: game?.name || 'Game Night',
+                  groupName: group.name,
+                  dateTime: formattedDateTime,
+                  eventUrl,
+                  rsvpPrompt: true
                 }
-              })
-              .catch(emailError => {
-                console.error('Error sending email notifications (non-fatal):', emailError.message);
-              });
-          } else if (recipients.length > 0 && !emailService.isConfigured()) {
-            if (process.env.NODE_ENV === 'development') {
-              console.warn('Email service not configured. Skipping email notifications.');
-            }
+              };
+            });
+
+            // Fire-and-forget (matches existing pattern)
+            Promise.allSettled([notifyPromises]).catch(err => {
+              console.error('Error sending event notifications (non-fatal):', err.message);
+            });
           }
-        } catch (emailError) {
+        } catch (notifyError) {
           // Log error but don't fail the event creation
-          console.error('Error preparing email notifications (non-fatal):', emailError.message);
+          console.error('Error preparing event notifications (non-fatal):', notifyError.message);
           if (process.env.NODE_ENV === 'development') {
-            console.error('Email error details:', emailError);
+            console.error('Notification error details:', notifyError);
           }
         }
       }
