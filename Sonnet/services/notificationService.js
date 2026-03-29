@@ -3,6 +3,7 @@
 // This is the single dispatch interface for all downstream notification phases (50-54).
 const emailService = require('./emailService');
 const smsService = require('./smsService');
+const { SentNotification } = require('../models');
 
 class NotificationService {
   constructor() {
@@ -86,6 +87,24 @@ class NotificationService {
       } catch (error) {
         console.error(`[NotificationService] SMS send failed for type=${type}:`, error.message);
         results.sms = { success: false, error: error.message };
+      }
+    }
+
+    // Log outbound SMS to SentNotification for inbound reply-to-event resolution.
+    // Only logs when SMS succeeded AND caller provided an eventId in the payload.
+    // Logging failure is non-fatal -- the notification was already sent.
+    if (results.sms && results.sms.success && payload.eventId) {
+      try {
+        await SentNotification.create({
+          user_id: user.user_id,
+          event_id: payload.eventId,
+          phone: user.phone,
+          channel: 'sms',
+          notification_type: type,
+          twilio_sid: results.sms.sid || null,
+        });
+      } catch (error) {
+        console.error('[NotificationService] SentNotification logging failed:', error.message);
       }
     }
 
