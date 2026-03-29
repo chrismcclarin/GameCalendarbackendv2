@@ -24,6 +24,7 @@ const GroupInvite = require('./GroupInvite');
 const EventRsvp = require('./EventRsvp');
 const EventBallotOption = require('./EventBallotOption');
 const EventBallotVote = require('./EventBallotVote');
+const SentNotification = require('./SentNotification');
 const sequelize = require('../config/database');
 
 
@@ -172,6 +173,13 @@ EventBallotVote.belongsTo(EventBallotOption, { foreignKey: 'option_id' });
 User.hasMany(EventBallotVote, { foreignKey: 'user_id', sourceKey: 'user_id' });
 EventBallotVote.belongsTo(User, { foreignKey: 'user_id', targetKey: 'user_id' });
 
+// Sent Notifications (outbound SMS log for inbound reply resolution)
+Event.hasMany(SentNotification, { foreignKey: 'event_id' });
+SentNotification.belongsTo(Event, { foreignKey: 'event_id' });
+// Note: Uses sourceKey/targetKey because user_id is STRING (Auth0 ID), not UUID
+User.hasMany(SentNotification, { foreignKey: 'user_id', sourceKey: 'user_id' });
+SentNotification.belongsTo(User, { foreignKey: 'user_id', targetKey: 'user_id' });
+
 
 module.exports = {
   User,
@@ -196,5 +204,6 @@ module.exports = {
   EventRsvp,
   EventBallotOption,
   EventBallotVote,
+  SentNotification,
   sequelize,
 };
