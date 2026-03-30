@@ -412,43 +412,112 @@ class AvailabilityService {
     const overlaps = await this.calculateGroupOverlaps(groupId, startDate, endDate, timezone);
 
     // 4. Query group members to determine who has/lacks availability data
-    const { Group, UserGroup } = require('../models');
+    const { Group, UserGroup, AvailabilityPrompt, AvailabilityResponse } = require('../models');
     const group = await Group.findByPk(groupId, {
       include: [{
         model: User,
         through: UserGroup,
-        attributes: ['id', 'user_id', 'username', 'email', 'google_calendar_enabled', 'google_calendar_token'],
+        attributes: ['id', 'user_id', 'username', 'email', 'google_calendar_enabled', 'google_calendar_token', 'google_calendar_refresh_token'],
       }],
     });
 
     const members = group ? group.Users || [] : [];
     const totalMembers = members.length;
 
-    // Check each member for availability data sources
+    // 5. Query active poll responses for this week
+    // Derive ISO week string from weekStart to match prompt's week_identifier
+    const weekDate = new Date(weekStart + 'T00:00:00Z');
+    // ISO week calculation: find the Thursday of this week, then get its week number
+    const thursday = new Date(weekDate);
+    thursday.setUTCDate(thursday.getUTCDate() + (4 - (thursday.getUTCDay() || 7)));
+    const yearStart = new Date(Date.UTC(thursday.getUTCFullYear(), 0, 1));
+    const weekNum = Math.ceil(((thursday - yearStart) / 86400000 + 1) / 7);
+    const isoWeek = `${thursday.getUTCFullYear()}-W${String(weekNum).padStart(2, '0')}`;
+
+    let pollResponseMap = new Map(); // user_id -> { username, slots: Set<"date_HH:MM"> }
+
+    const prompts = await AvailabilityPrompt.findAll({
+      where: {
+        group_id: groupId,
+        status: 'active',
+        week_identifier: isoWeek,
+      },
+      order: [['createdAt', 'DESC']],
+      limit: 1,
+    });
+
+    if (prompts.length > 0) {
+      const prompt = prompts[0];
+      const responses = await AvailabilityResponse.findAll({
+        where: { prompt_id: prompt.id },
+        include: [{ model: User, attributes: ['user_id', 'username'] }],
+      });
+
+      for (const response of responses) {
+        const userId = response.user_id;
+        const username = response.User?.username || 'Unknown';
+        if (!pollResponseMap.has(userId)) {
+          pollResponseMap.set(userId, { username, slots: new Set() });
+        }
+        // Convert response time_slots to date_HH:MM keys
+        for (const slot of response.time_slots || []) {
+          const slotStart = new Date(slot.start);
+          const dateStr = this.formatDateISO(slotStart);
+          const hh = String(slotStart.getUTCHours()).padStart(2, '0');
+          const mm = String(slotStart.getUTCMinutes()).padStart(2, '0');
+          pollResponseMap.get(userId).slots.add(`${dateStr}_${hh}:${mm}`);
+        }
+      }
+    }
+
+    // 6. Build gcal busy map for users with both poll responses AND gcal enabled
+    const gcalBusyMap = new Map(); // user_id -> { username, busySlots: Set<"date_HH:MM"> }
+    for (const member of members) {
+      const hasGcal = member.google_calendar_enabled && member.google_calendar_token;
+      if (hasGcal && pollResponseMap.has(member.user_id)) {
+        try {
+          const busyTimes = await googleCalendarService.getBusyTimesForDateRange(
+            member, startDate, endDate, timezone
+          );
+          const busySet = new Set();
+          for (const busy of busyTimes) {
+            // busy has { date, startTime, endTime } format from getBusyTimesForDateRange
+            busySet.add(`${busy.date}_${busy.startTime}`);
+          }
+          gcalBusyMap.set(member.user_id, { username: member.username, busySlots: busySet });
+        } catch (err) {
+          console.warn(`Failed to fetch gcal for ${member.user_id}:`, err.message);
+        }
+      }
+    }
+
+    // Check each member for availability data sources (including poll responses)
     const membersWithoutData = [];
     for (const member of members) {
       const hasGcal = member.google_calendar_enabled && member.google_calendar_token;
+      const hasPollResponse = pollResponseMap.has(member.user_id);
       let hasRecurring = false;
-      if (!hasGcal) {
+      if (!hasGcal && !hasPollResponse) {
         const records = await UserAvailability.findAll({
           where: { user_id: member.user_id },
         });
         hasRecurring = records.length > 0;
       }
-      if (!hasGcal && !hasRecurring) {
+      if (!hasGcal && !hasRecurring && !hasPollResponse) {
         membersWithoutData.push({ user_id: member.user_id, username: member.username });
       }
     }
 
     const membersWithData = totalMembers - membersWithoutData.length;
 
-    // 5. Build a lookup map for overlaps: key = "date_HH:MM"
+    // 7. Build a lookup map for overlaps: key = "date_HH:MM"
     const overlapMap = new Map();
     for (const slot of overlaps) {
       overlapMap.set(`${slot.date}_${slot.timeSlot}`, slot);
     }
 
-    // 6. Generate 77 hourly slots (7 days x 11 hours: 12-22)
+    // 8. Generate 91 hourly slots (7 days x 13 hours: 10-22) with poll merging
+    const gcalConflicts = [];
     const slots = [];
     for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
       const slotDate = new Date(startDate);
@@ -456,7 +525,7 @@ class AvailabilityService {
       const dateStr = this.formatDateISO(slotDate);
       const isoDayOfWeek = this.getISODayOfWeek(slotDate);
 
-      for (let hour = 12; hour <= 22; hour++) {
+      for (let hour = 10; hour <= 22; hour++) {
         const h00Key = `${dateStr}_${String(hour).padStart(2, '0')}:00`;
         const h30Key = `${dateStr}_${String(hour).padStart(2, '0')}:30`;
 
@@ -467,11 +536,44 @@ class AvailabilityService {
         const members00 = slot00 ? slot00.availableMembers : [];
         const members30 = slot30 ? slot30.availableMembers : [];
 
-        // Intersect by user_id
+        // Intersect by user_id for overlap-based availability
         const members30Set = new Set(members30.map(m => m.user_id));
-        const availableMembers = members00
-          .filter(m => members30Set.has(m.user_id))
-          .map(m => ({ user_id: m.user_id, username: m.username }));
+        const overlapAvailable = new Map(); // user_id -> { user_id, username }
+        for (const m of members00) {
+          if (members30Set.has(m.user_id)) {
+            overlapAvailable.set(m.user_id, { user_id: m.user_id, username: m.username });
+          }
+        }
+
+        // Apply poll response priority: poll > gcal > recurring
+        const finalAvailable = new Map(overlapAvailable);
+
+        for (const [userId, pollData] of pollResponseMap.entries()) {
+          const hasBothSubSlots = pollData.slots.has(h00Key) && pollData.slots.has(h30Key);
+          if (hasBothSubSlots) {
+            // Poll says available -- override overlap result
+            finalAvailable.set(userId, { user_id: userId, username: pollData.username });
+
+            // Check for gcal conflict
+            const gcalData = gcalBusyMap.get(userId);
+            if (gcalData) {
+              const hasGcalBusy = gcalData.busySlots.has(h00Key) || gcalData.busySlots.has(h30Key);
+              if (hasGcalBusy) {
+                gcalConflicts.push({
+                  user_id: userId,
+                  username: gcalData.username,
+                  date: dateStr,
+                  hour,
+                });
+              }
+            }
+          } else {
+            // Poll says NOT available for this slot -- remove from available even if overlap had them
+            finalAvailable.delete(userId);
+          }
+        }
+
+        const availableMembers = Array.from(finalAvailable.values());
 
         slots.push({
           date: dateStr,
@@ -490,6 +592,7 @@ class AvailabilityService {
       totalMembers,
       membersWithData,
       membersWithoutData,
+      gcalConflicts,
       slots,
     };
   }

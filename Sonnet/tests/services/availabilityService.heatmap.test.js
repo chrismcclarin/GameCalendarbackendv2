@@ -1,5 +1,5 @@
 // tests/services/availabilityService.heatmap.test.js
-// Unit tests for getGroupHeatmap -- 30-min to 1-hour bucketing and heatmap normalization
+// Unit tests for getGroupHeatmap -- 30-min to 1-hour bucketing, poll merging, and heatmap normalization
 
 // Mock models before requiring the service
 jest.mock('../../models', () => {
@@ -11,11 +11,19 @@ jest.mock('../../models', () => {
     findAll: jest.fn().mockResolvedValue([]),
   };
   const mockUser = {};
+  const mockAvailabilityPrompt = {
+    findAll: jest.fn().mockResolvedValue([]),
+  };
+  const mockAvailabilityResponse = {
+    findAll: jest.fn().mockResolvedValue([]),
+  };
   return {
     Group: mockGroup,
     UserGroup: mockUserGroup,
     UserAvailability: mockUserAvailability,
     User: mockUser,
+    AvailabilityPrompt: mockAvailabilityPrompt,
+    AvailabilityResponse: mockAvailabilityResponse,
   };
 });
 
@@ -24,12 +32,16 @@ jest.mock('../../services/googleCalendarService', () => ({
 }));
 
 const availabilityService = require('../../services/availabilityService');
-const { Group, UserAvailability } = require('../../models');
+const { Group, UserAvailability, AvailabilityPrompt, AvailabilityResponse } = require('../../models');
+const googleCalendarService = require('../../services/googleCalendarService');
 
 describe('availabilityService.getGroupHeatmap', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // Default: no active prompts
+    AvailabilityPrompt.findAll.mockResolvedValue([]);
+    AvailabilityResponse.findAll.mockResolvedValue([]);
   });
 
   // Helper to build mock overlap data (what calculateGroupOverlaps returns)
@@ -132,13 +144,13 @@ describe('availabilityService.getGroupHeatmap', () => {
   });
 
   // ===================================
-  // Test 3: Slots outside 12pm-11pm are excluded
+  // Test 3: Slots outside 10am-11pm are excluded
   // ===================================
-  it('excludes slots outside 12pm-10pm range (11:00 and 23:00 excluded)', async () => {
+  it('excludes slots outside 10am-11pm range (09:00 and 23:00 excluded)', async () => {
     const overlaps = [
-      // 11:00 and 11:30 -- should be excluded (before 12pm)
-      buildOverlapSlot('2026-03-23', '11:00', [userA], 3),
-      buildOverlapSlot('2026-03-23', '11:30', [userA], 3),
+      // 09:00 and 09:30 -- should be excluded (before 10am)
+      buildOverlapSlot('2026-03-23', '09:00', [userA], 3),
+      buildOverlapSlot('2026-03-23', '09:30', [userA], 3),
       // 14:00 and 14:30 -- should be included
       buildOverlapSlot('2026-03-23', '14:00', [userA], 3),
       buildOverlapSlot('2026-03-23', '14:30', [userA], 3),
@@ -151,9 +163,9 @@ describe('availabilityService.getGroupHeatmap', () => {
 
     const result = await availabilityService.getGroupHeatmap('test-group-id', '2026-03-23', 'UTC');
 
-    // No slot for hour 11
-    const slot11 = result.slots.find(s => s.date === '2026-03-23' && s.hour === 11);
-    expect(slot11).toBeUndefined();
+    // No slot for hour 9
+    const slot09 = result.slots.find(s => s.date === '2026-03-23' && s.hour === 9);
+    expect(slot09).toBeUndefined();
 
     // No slot for hour 23
     const slot23 = result.slots.find(s => s.date === '2026-03-23' && s.hour === 23);
@@ -163,12 +175,16 @@ describe('availabilityService.getGroupHeatmap', () => {
     const slot14 = result.slots.find(s => s.date === '2026-03-23' && s.hour === 14);
     expect(slot14).toBeDefined();
     expect(slot14.availableCount).toBe(1);
+
+    // Hour 10 should now exist (new lower boundary)
+    const slot10 = result.slots.find(s => s.date === '2026-03-23' && s.hour === 10);
+    expect(slot10).toBeDefined();
   });
 
   // ===================================
-  // Test 4: membersWithoutData identifies members with no recurring schedule or gcal
+  // Test 4: membersWithoutData identifies members with no recurring schedule, gcal, or poll response
   // ===================================
-  it('membersWithoutData lists members with no recurring schedule or gcal', async () => {
+  it('membersWithoutData lists members with no recurring schedule, gcal, or poll response', async () => {
     mockOverlaps([]);
     // 5 members: 3 have availability data, 2 do not
     mockGroupMembers(
@@ -202,19 +218,19 @@ describe('availabilityService.getGroupHeatmap', () => {
   });
 
   // ===================================
-  // Test 5: Returns exactly 77 slots (7 days x 11 hours)
+  // Test 5: Returns exactly 91 slots (7 days x 13 hours: 10-22)
   // ===================================
-  it('returns exactly 77 slots (7 days x 11 hours) for a full week', async () => {
+  it('returns exactly 91 slots (7 days x 13 hours) for a full week', async () => {
     mockOverlaps([]);
     mockGroupMembers([userA], { 'auth0|aaa': true });
 
     const result = await availabilityService.getGroupHeatmap('test-group-id', '2026-03-23', 'UTC');
 
-    expect(result.slots).toHaveLength(77);
+    expect(result.slots).toHaveLength(91);
 
-    // Verify all hours are 12-22
+    // Verify all hours are 10-22
     const hours = [...new Set(result.slots.map(s => s.hour))];
-    expect(hours.sort((a, b) => a - b)).toEqual([12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]);
+    expect(hours.sort((a, b) => a - b)).toEqual([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]);
 
     // Verify all 7 days present
     const dates = [...new Set(result.slots.map(s => s.date))];
@@ -256,9 +272,9 @@ describe('availabilityService.getGroupHeatmap', () => {
   });
 
   // ===================================
-  // Test 8: Response shape -- weekStart, weekEnd, totalMembers fields
+  // Test 8: Response shape -- weekStart, weekEnd, totalMembers, gcalConflicts fields
   // ===================================
-  it('returns correct response shape with weekStart, weekEnd, totalMembers', async () => {
+  it('returns correct response shape with weekStart, weekEnd, totalMembers, gcalConflicts', async () => {
     mockOverlaps([]);
     mockGroupMembers([userA, userB], { 'auth0|aaa': true, 'auth0|bbb': true });
 
@@ -270,6 +286,8 @@ describe('availabilityService.getGroupHeatmap', () => {
     expect(result.membersWithData).toBe(2);
     expect(result.membersWithoutData).toEqual([]);
     expect(Array.isArray(result.slots)).toBe(true);
+    expect(Array.isArray(result.gcalConflicts)).toBe(true);
+    expect(result.gcalConflicts).toEqual([]);
   });
 
   // ===================================
@@ -294,5 +312,137 @@ describe('availabilityService.getGroupHeatmap', () => {
       totalMembers: 2,
       availableMembers: [{ user_id: 'auth0|aaa', username: 'Alice' }],
     });
+  });
+
+  // ===================================
+  // Test 10: Poll response overrides overlap data (poll says available)
+  // ===================================
+  it('poll response marks user as available even when overlap data says unavailable', async () => {
+    // No overlap data for userA at 19:00-19:30 (gcal/recurring says busy)
+    const overlaps = [];
+    mockOverlaps(overlaps);
+    mockGroupMembers([userA, userB], { 'auth0|aaa': true, 'auth0|bbb': true });
+
+    // Mock an active prompt for this week
+    AvailabilityPrompt.findAll.mockResolvedValue([{
+      id: 'prompt-1',
+      group_id: 'test-group-id',
+      status: 'active',
+      week_identifier: '2026-W13',
+    }]);
+
+    // User A responded with availability at 19:00-20:00 on Monday
+    AvailabilityResponse.findAll.mockResolvedValue([{
+      user_id: 'auth0|aaa',
+      prompt_id: 'prompt-1',
+      time_slots: [
+        { start: '2026-03-23T19:00:00.000Z', end: '2026-03-23T19:30:00.000Z', preference: 'preferred' },
+        { start: '2026-03-23T19:30:00.000Z', end: '2026-03-23T20:00:00.000Z', preference: 'preferred' },
+      ],
+      User: { user_id: 'auth0|aaa', username: 'Alice' },
+    }]);
+
+    const result = await availabilityService.getGroupHeatmap('test-group-id', '2026-03-23', 'UTC');
+
+    const slot19 = result.slots.find(s => s.date === '2026-03-23' && s.hour === 19);
+    expect(slot19).toBeDefined();
+    expect(slot19.availableCount).toBe(1);
+    expect(slot19.availableMembers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ user_id: 'auth0|aaa', username: 'Alice' })
+      ])
+    );
+  });
+
+  // ===================================
+  // Test 11: Poll response removes user from available when poll says unavailable
+  // ===================================
+  it('poll response removes user from slot when poll has no data for that hour', async () => {
+    // Overlap says userA is available at 14:00-14:30 (from recurring)
+    const overlaps = [
+      buildOverlapSlot('2026-03-23', '14:00', [userA], 2),
+      buildOverlapSlot('2026-03-23', '14:30', [userA], 2),
+    ];
+    mockOverlaps(overlaps);
+    mockGroupMembers([userA, userB], { 'auth0|aaa': true, 'auth0|bbb': true });
+
+    // Mock active prompt
+    AvailabilityPrompt.findAll.mockResolvedValue([{
+      id: 'prompt-1',
+      group_id: 'test-group-id',
+      status: 'active',
+      week_identifier: '2026-W13',
+    }]);
+
+    // User A responded but only for 19:00-20:00, not 14:00
+    AvailabilityResponse.findAll.mockResolvedValue([{
+      user_id: 'auth0|aaa',
+      prompt_id: 'prompt-1',
+      time_slots: [
+        { start: '2026-03-23T19:00:00.000Z', end: '2026-03-23T19:30:00.000Z', preference: 'preferred' },
+        { start: '2026-03-23T19:30:00.000Z', end: '2026-03-23T20:00:00.000Z', preference: 'preferred' },
+      ],
+      User: { user_id: 'auth0|aaa', username: 'Alice' },
+    }]);
+
+    const result = await availabilityService.getGroupHeatmap('test-group-id', '2026-03-23', 'UTC');
+
+    // At 14:00, userA should be removed because poll takes priority and poll says unavailable at that hour
+    const slot14 = result.slots.find(s => s.date === '2026-03-23' && s.hour === 14);
+    expect(slot14).toBeDefined();
+    expect(slot14.availableCount).toBe(0);
+  });
+
+  // ===================================
+  // Test 12: gcalConflicts detected when poll says available but gcal says busy
+  // ===================================
+  it('detects gcal conflicts when poll says available but Google Calendar says busy', async () => {
+    mockOverlaps([]);
+    mockGroupMembers([
+      { ...userA, google_calendar_enabled: true, google_calendar_token: 'token-a' },
+      userB,
+    ], { 'auth0|aaa': false, 'auth0|bbb': true });
+
+    // Mock active prompt
+    AvailabilityPrompt.findAll.mockResolvedValue([{
+      id: 'prompt-1',
+      group_id: 'test-group-id',
+      status: 'active',
+      week_identifier: '2026-W13',
+    }]);
+
+    // User A responded available at 19:00-20:00
+    AvailabilityResponse.findAll.mockResolvedValue([{
+      user_id: 'auth0|aaa',
+      prompt_id: 'prompt-1',
+      time_slots: [
+        { start: '2026-03-23T19:00:00.000Z', end: '2026-03-23T19:30:00.000Z', preference: 'preferred' },
+        { start: '2026-03-23T19:30:00.000Z', end: '2026-03-23T20:00:00.000Z', preference: 'preferred' },
+      ],
+      User: { user_id: 'auth0|aaa', username: 'Alice' },
+    }]);
+
+    // Gcal says busy at 19:00-19:30
+    googleCalendarService.getBusyTimesForDateRange.mockResolvedValue([
+      { date: '2026-03-23', startTime: '19:00', endTime: '19:30' },
+    ]);
+
+    const result = await availabilityService.getGroupHeatmap('test-group-id', '2026-03-23', 'UTC');
+
+    // User A should still be available (poll takes priority)
+    const slot19 = result.slots.find(s => s.date === '2026-03-23' && s.hour === 19);
+    expect(slot19.availableCount).toBe(1);
+
+    // But a gcal conflict should be recorded
+    expect(result.gcalConflicts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          user_id: 'auth0|aaa',
+          username: 'Alice',
+          date: '2026-03-23',
+          hour: 19,
+        })
+      ])
+    );
   });
 });

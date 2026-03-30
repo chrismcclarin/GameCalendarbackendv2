@@ -341,7 +341,7 @@ router.get('/group/:group_id/overlaps',
   }
 );
 
-// Get heatmap data for group availability (normalized 1-hour slots, 12pm-11pm)
+// Get heatmap data for group availability (normalized 1-hour slots, 10am-11pm)
 router.get('/group/:group_id/heatmap',
   validateUUID('group_id'),
   async (req, res) => {
