@@ -16,7 +16,7 @@ class AvailabilityService {
     const slots = [];
     const start = new Date(startDate);
     const end = new Date(endDate);
-    
+
     // Safety check: prevent infinite loops
     const maxDays = 365; // Maximum 365 days as a safety limit
     const maxIterations = maxDays * 48; // 48 slots per day (30-minute intervals)
@@ -103,27 +103,46 @@ class AvailabilityService {
   }
 
   /**
+   * Convert a UTC slot's date/time to the user's local timezone.
+   * Returns { date: 'YYYY-MM-DD', startTime: 'HH:MM', dayOfWeek: 0-6 }
+   */
+  slotToLocal(slot, timezone) {
+    if (!timezone || timezone === 'UTC') return null;
+    const utcDate = new Date(`${slot.date}T${slot.startTime}:00Z`);
+    const localDate = utcDate.toLocaleDateString('en-CA', { timeZone: timezone }); // YYYY-MM-DD
+    const localTime = utcDate.toLocaleTimeString('en-GB', { timeZone: timezone, hour: '2-digit', minute: '2-digit' });
+    const localDayOfWeek = new Date(localDate + 'T12:00:00').getDay(); // noon avoids edge cases
+    return { date: localDate, startTime: localTime, dayOfWeek: localDayOfWeek };
+  }
+
+  /**
    * Check if a time slot matches a recurring pattern
    */
-  matchesRecurringPattern(slot, pattern) {
-    const slotDate = new Date(slot.date);
-    const dayOfWeek = this.getDayOfWeek(slotDate);
-    
+  matchesRecurringPattern(slot, pattern, timezone) {
+    // Patterns store times in the user's local timezone.
+    // Slots are generated in UTC (on a UTC server). Convert to local for matching.
+    const local = (timezone && timezone !== 'UTC') ? this.slotToLocal(slot, timezone) : null;
+    const matchDate = local ? local.date : slot.date;
+    const matchTime = local ? local.startTime : slot.startTime;
+    const matchDay = local ? local.dayOfWeek : this.getDayOfWeek(new Date(slot.date));
+
+    const slotDate = new Date(matchDate);
+
     // Check if date is within pattern's date range
     if (!this.isDateInRange(slotDate, pattern.start_date, pattern.end_date)) {
       return false;
     }
-    
+
     // Check if day of week matches
-    if (pattern.pattern_data.dayOfWeek !== dayOfWeek) {
+    if (pattern.pattern_data.dayOfWeek !== matchDay) {
       return false;
     }
-    
+
     // Check if time slot is within pattern's time range
-    const slotStart = this.timeToMinutes(slot.startTime);
+    const slotStart = this.timeToMinutes(matchTime);
     const patternStart = this.timeToMinutes(pattern.pattern_data.startTime);
     const patternEnd = this.timeToMinutes(pattern.pattern_data.endTime);
-    
+
     // Slot is available if it starts within the pattern's time range
     // and doesn't extend beyond it
     return slotStart >= patternStart && slotStart < patternEnd;
@@ -212,7 +231,7 @@ class AvailabilityService {
       for (const pattern of recurringPatterns) {
         allSlots.forEach(slot => {
           const key = `${slot.date}_${slot.startTime}`;
-          if (this.matchesRecurringPattern(slot, pattern)) {
+          if (this.matchesRecurringPattern(slot, pattern, timezone)) {
             const slotData = availabilityMap.get(key);
             if (slotData) {
               slotData.isAvailable = true;
@@ -237,7 +256,8 @@ class AvailabilityService {
         });
       }
 
-      // If Google Calendar is enabled, fetch busy times and mark those slots as unavailable
+      // If Google Calendar is enabled, use it as full availability override (gcal > recurring in priority)
+      // Free on calendar = available, busy on calendar = unavailable
       if (user.google_calendar_enabled && user.google_calendar_token) {
         try {
           const busySlots = await googleCalendarService.getBusyTimesForDateRange(
@@ -247,14 +267,21 @@ class AvailabilityService {
             timezone
           );
 
-          // Mark busy slots as unavailable (unless overridden by specific override)
-          busySlots.forEach(busySlot => {
-            const key = `${busySlot.date}_${busySlot.startTime}`;
+          // Build set of busy slot keys for quick lookup
+          const busyKeys = new Set(busySlots.map(s => `${s.date}_${s.startTime}`));
+
+          // GCal overrides recurring: free slots → available, busy slots → unavailable
+          allSlots.forEach(slot => {
+            const key = `${slot.date}_${slot.startTime}`;
             const slotData = availabilityMap.get(key);
             if (slotData && slotData.source !== 'specific_override') {
-              // Only override if not already set by specific override
-              slotData.isAvailable = false;
-              slotData.source = 'google_calendar';
+              if (busyKeys.has(key)) {
+                slotData.isAvailable = false;
+                slotData.source = 'google_calendar';
+              } else {
+                slotData.isAvailable = true;
+                slotData.source = 'google_calendar';
+              }
             }
           });
         } catch (error) {
@@ -402,7 +429,7 @@ class AvailabilityService {
       throw new Error('weekStart must be a Monday');
     }
 
-    // 2. Calculate weekEnd (Monday + 7 days = next Monday)
+    // 2. Calculate weekEnd (Monday + 7 days = next Monday, for overlap coverage)
     const endDate = new Date(startDate);
     endDate.setUTCDate(endDate.getUTCDate() + 7);
     const weekStartStr = this.formatDateISO(startDate);
@@ -516,7 +543,9 @@ class AvailabilityService {
       overlapMap.set(`${slot.date}_${slot.timeSlot}`, slot);
     }
 
-    // 8. Generate 91 hourly slots (7 days x 13 hours: 10-22) with poll merging
+    // 8. Generate hourly slots (7 days x 13 hours: 10am-10pm) with poll merging
+    //    Uniform 10am-11pm range for all days. The frontend maps UTC slots to
+    //    local display using the same range.
     const gcalConflicts = [];
     const slots = [];
     for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
