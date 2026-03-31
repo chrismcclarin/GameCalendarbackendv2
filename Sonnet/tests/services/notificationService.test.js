@@ -86,6 +86,7 @@ describe('notificationService', () => {
         email_notifications_enabled: true,
         sms_enabled: true,
         phone: '+14155551234',
+        phone_verified: true,
         notification_preferences: null
       };
       expect(notificationService.getPreference(user, 'event_confirmation', 'sms')).toBe(false);
@@ -96,6 +97,7 @@ describe('notificationService', () => {
         email_notifications_enabled: true,
         sms_enabled: false,
         phone: '+14155551234',
+        phone_verified: true,
         notification_preferences: {
           event_confirmation: { sms: true }
         }
@@ -120,6 +122,7 @@ describe('notificationService', () => {
         email_notifications_enabled: true,
         sms_enabled: true,
         phone: '',
+        phone_verified: true,
         notification_preferences: {
           event_confirmation: { sms: true }
         }
@@ -127,11 +130,12 @@ describe('notificationService', () => {
       expect(notificationService.getPreference(user, 'event_confirmation', 'sms')).toBe(false);
     });
 
-    it('returns true for sms ONLY when sms_enabled=true AND phone exists AND explicit preference is true', () => {
+    it('returns true for sms ONLY when sms_enabled=true AND phone exists AND phone_verified AND explicit preference is true', () => {
       const user = {
         email_notifications_enabled: true,
         sms_enabled: true,
         phone: '+14155551234',
+        phone_verified: true,
         notification_preferences: {
           event_confirmation: { sms: true }
         }
@@ -139,12 +143,26 @@ describe('notificationService', () => {
       expect(notificationService.getPreference(user, 'event_confirmation', 'sms')).toBe(true);
     });
 
-    it('returns false for sms when sms_enabled=true AND phone exists but no explicit preference (default=false)', () => {
+    it('returns false for sms when sms_enabled=true AND phone exists AND phone_verified but no explicit preference (default=false)', () => {
       const user = {
         email_notifications_enabled: true,
         sms_enabled: true,
         phone: '+14155551234',
+        phone_verified: true,
         notification_preferences: null
+      };
+      expect(notificationService.getPreference(user, 'event_confirmation', 'sms')).toBe(false);
+    });
+
+    it('returns false for sms when phone_verified is false even with sms_enabled=true AND phone AND explicit preference', () => {
+      const user = {
+        email_notifications_enabled: true,
+        sms_enabled: true,
+        phone: '+14155551234',
+        phone_verified: false,
+        notification_preferences: {
+          event_confirmation: { sms: true }
+        }
       };
       expect(notificationService.getPreference(user, 'event_confirmation', 'sms')).toBe(false);
     });
@@ -182,11 +200,12 @@ describe('notificationService', () => {
       expect(results.sms).toBeNull();
     });
 
-    it('dispatches to both when user has explicit sms preference and sms_enabled+phone', async () => {
+    it('dispatches to both when user has explicit sms preference and sms_enabled+phone+phone_verified', async () => {
       const user = {
         email_notifications_enabled: true,
         sms_enabled: true,
         phone: '+14155551234',
+        phone_verified: true,
         notification_preferences: {
           event_confirmation: { email: true, sms: true }
         }
@@ -259,6 +278,7 @@ describe('notificationService', () => {
         email_notifications_enabled: false,
         sms_enabled: true,
         phone: '+14155551234',
+        phone_verified: true,
         notification_preferences: {
           reminder: { sms: true }
         }
@@ -295,6 +315,7 @@ describe('notificationService', () => {
           email_notifications_enabled: true,
           sms_enabled: false,
           phone: null,
+          phone_verified: false,
           notification_preferences: { event_created: { email: true } }
         },
         {
@@ -302,6 +323,7 @@ describe('notificationService', () => {
           email_notifications_enabled: false,
           sms_enabled: true,
           phone: '+14155551111',
+          phone_verified: true,
           notification_preferences: { event_created: { sms: true } }
         },
         {
@@ -309,6 +331,7 @@ describe('notificationService', () => {
           email_notifications_enabled: true,
           sms_enabled: true,
           phone: '+14155552222',
+          phone_verified: true,
           notification_preferences: { event_created: { email: true, sms: true } }
         }
       ];
@@ -336,6 +359,7 @@ describe('notificationService', () => {
           email_notifications_enabled: true,
           sms_enabled: true,
           phone: '+14155551111',
+          phone_verified: true,
           notification_preferences: { event_created: { sms: true } }
         },
         {
@@ -343,6 +367,7 @@ describe('notificationService', () => {
           email_notifications_enabled: true,
           sms_enabled: true,
           phone: '+14155552222',
+          phone_verified: true,
           notification_preferences: { event_created: { sms: true } }
         }
       ];

@@ -392,4 +392,158 @@ router.post('/:user_id/refresh', async (req, res) => {
   }
 });
 
+// Update notification preferences
+router.patch('/:user_id/notification-preferences', async (req, res) => {
+  try {
+    const userId = req.user?.user_id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    if (req.params.user_id !== userId) {
+      return res.status(403).json({ error: 'Forbidden: Cannot update other users\' notification preferences' });
+    }
+
+    const { preferences } = req.body;
+    if (!preferences || typeof preferences !== 'object') {
+      return res.status(400).json({ error: 'preferences object is required' });
+    }
+
+    // Validate shape: each key must have boolean email/sms values
+    const validTypes = ['event_created', 'reminder', 'event_updated', 'event_cancelled'];
+    for (const [type, channels] of Object.entries(preferences)) {
+      if (!validTypes.includes(type)) {
+        return res.status(400).json({ error: `Unknown notification type: ${type}` });
+      }
+      if (typeof channels !== 'object' || channels === null) {
+        return res.status(400).json({ error: `Invalid channels for type: ${type}` });
+      }
+      if (channels.email !== undefined && typeof channels.email !== 'boolean') {
+        return res.status(400).json({ error: `email must be a boolean for type: ${type}` });
+      }
+      if (channels.sms !== undefined && typeof channels.sms !== 'boolean') {
+        return res.status(400).json({ error: `sms must be a boolean for type: ${type}` });
+      }
+      // At least one channel must be enabled per type
+      const emailEnabled = channels.email !== undefined ? channels.email : true; // default email=true
+      const smsEnabled = channels.sms !== undefined ? channels.sms : false; // default sms=false
+      if (!emailEnabled && !smsEnabled) {
+        return res.status(400).json({ error: `At least one channel must be enabled per notification type (${type})` });
+      }
+    }
+
+    const user = await User.findOne({ where: { user_id: userId } });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    await user.update({ notification_preferences: preferences });
+    res.json(user);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Save phone number and initiate Twilio Verify verification
+router.post('/:user_id/phone', async (req, res) => {
+  try {
+    const userId = req.user?.user_id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    if (req.params.user_id !== userId) {
+      return res.status(403).json({ error: 'Forbidden: Cannot update other users\' phone numbers' });
+    }
+
+    const { phone } = req.body;
+    if (!phone) {
+      return res.status(400).json({ error: 'Phone number is required' });
+    }
+
+    // Validate using libphonenumber-js
+    const { validatePhone } = require('../utils/phoneValidation');
+    const result = validatePhone(phone);
+    if (!result.valid) {
+      return res.status(400).json({ error: result.error });
+    }
+
+    const user = await User.findOne({ where: { user_id: userId } });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Save phone and reset verification status
+    await user.update({ phone: result.e164, phone_verified: false });
+
+    // Initiate Twilio Verify
+    const verifySid = process.env.TWILIO_VERIFY_SERVICE_SID;
+    if (!verifySid) {
+      return res.status(500).json({ error: 'Phone verification service is not configured. TWILIO_VERIFY_SERVICE_SID is missing.' });
+    }
+
+    const twilio = require('twilio');
+    const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    await client.verify.v2.services(verifySid).verifications.create({
+      to: result.e164,
+      channel: 'sms',
+    });
+
+    res.json({ status: 'verification_sent' });
+  } catch (error) {
+    console.error('[users] Phone verification initiation failed:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Verify phone with SMS code from Twilio Verify
+router.post('/:user_id/phone/verify', async (req, res) => {
+  try {
+    const userId = req.user?.user_id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    if (req.params.user_id !== userId) {
+      return res.status(403).json({ error: 'Forbidden: Cannot verify other users\' phone numbers' });
+    }
+
+    const { code } = req.body;
+    if (!code || typeof code !== 'string' || !/^\d{6}$/.test(code)) {
+      return res.status(400).json({ error: 'Code must be a string of exactly 6 digits' });
+    }
+
+    const user = await User.findOne({ where: { user_id: userId } });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (!user.phone) {
+      return res.status(400).json({ error: 'No phone number on file to verify' });
+    }
+
+    const verifySid = process.env.TWILIO_VERIFY_SERVICE_SID;
+    if (!verifySid) {
+      return res.status(500).json({ error: 'Phone verification service is not configured. TWILIO_VERIFY_SERVICE_SID is missing.' });
+    }
+
+    const twilio = require('twilio');
+    const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    const check = await client.verify.v2.services(verifySid).verificationChecks.create({
+      to: user.phone,
+      code,
+    });
+
+    if (check.status === 'approved') {
+      await user.update({ phone_verified: true });
+      return res.json({ verified: true });
+    }
+
+    res.json({ verified: false, error: 'Invalid or expired code' });
+  } catch (error) {
+    console.error('[users] Phone verification check failed:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 module.exports = router;

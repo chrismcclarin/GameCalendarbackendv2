@@ -31,6 +31,7 @@ class NotificationService {
     if (channel === 'sms') {
       if (!user.sms_enabled) return false;
       if (!user.phone) return false;
+      if (!user.phone_verified) return false;
     }
 
     if (channel === 'email') {

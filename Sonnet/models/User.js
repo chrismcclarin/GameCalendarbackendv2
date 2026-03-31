@@ -70,6 +70,11 @@ const User = sequelize.define('User', {
     allowNull: false,
     defaultValue: false,
   },
+  phone_verified: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+  },
   // Shape: { [type]: { email: bool, sms: bool } } -- null = use defaults
   notification_preferences: {
     type: DataTypes.JSONB,
