@@ -419,7 +419,7 @@ This is an automated notification from Next Game Night.
    * @deprecated Use React Email templates instead (Phase 2, Plan 2)
    */
   generateGameSessionEmailTemplate(eventData) {
-    const { gameName, groupName, startDate, startTime, durationMinutes, location, comments, eventUrl, recipientName, rsvpUrls } = eventData;
+    const { gameName, groupName, startDate, startTime, durationMinutes, location, comments, eventUrl, recipientName, rsvpUrls, ballotUrl } = eventData;
 
     const formattedDate = this.formatEventDate(startDate);
     const endTime = this.calculateEndTime(startTime, durationMinutes);
@@ -452,6 +452,23 @@ RSVP:
 - No: ${rsvpUrls.noUrl}
 ` : '';
 
+    // Ballot vote button HTML (only when ballot exists)
+    const ballotButtonHtml = ballotUrl ? `
+      <div style="text-align: center; margin: 10px 0 20px;">
+        <p style="font-size: 14px; color: #6B7280; margin-bottom: 8px;">A game ballot is open for this session:</p>
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0" align="center">
+          <tr>
+            <td style="padding: 0 6px;">
+              <a href="${ballotUrl}" style="display: inline-block; padding: 12px 24px; background-color: #4F46E5; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 14px;">Vote for a Game</a>
+            </td>
+          </tr>
+        </table>
+      </div>
+    ` : '';
+
+    // Ballot plain text link
+    const ballotPlainText = ballotUrl ? `\nVote for a game: ${ballotUrl}\n` : '';
+
     const html = `
 <!DOCTYPE html>
 <html>
@@ -481,6 +498,8 @@ RSVP:
       <p>A new game session has been scheduled for your group <strong>${groupName}</strong>.</p>
 
       ${rsvpButtonsHtml}
+
+      ${ballotButtonHtml}
 
       <div class="event-details">
         <div class="event-detail-row">
@@ -538,6 +557,7 @@ Hi ${recipientName || 'there'},
 
 A new game session has been scheduled for your group "${groupName}".
 ${rsvpPlainText}
+${ballotPlainText}
 Event Details:
 - Game: ${gameName}
 - Date: ${formattedDate}

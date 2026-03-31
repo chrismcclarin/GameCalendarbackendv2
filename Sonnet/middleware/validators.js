@@ -155,6 +155,20 @@ const validateEventCreate = [
     .optional()
     .isLength({ max: 255 })
     .withMessage('Faction must be less than 255 characters'),
+  body('ballot_options')
+    .optional()
+    .isArray()
+    .withMessage('Ballot options must be an array'),
+  body('ballot_options.*.game_id')
+    .optional({ nullable: true })
+    .isUUID()
+    .withMessage('Ballot option game_id must be a valid UUID when provided'),
+  body('ballot_options.*.game_name')
+    .notEmpty()
+    .withMessage('Ballot option game_name is required')
+    .trim()
+    .isLength({ min: 1, max: 255 })
+    .withMessage('Ballot option game_name must be between 1 and 255 characters'),
   validate
 ];
 

@@ -93,7 +93,9 @@ class SmsService {
       event_created: () => {
         const name = sanitizeForSms(d.eventName);
         const group = sanitizeForSms(d.groupName);
-        let msg = `Hey! ${name} with ${group} is set for ${d.dateTime}. Details: ${d.eventUrl}`;
+        const url = d.ballotUrl || d.eventUrl;
+        const linkText = d.ballotUrl ? 'RSVP & vote' : 'Details';
+        let msg = `Hey! ${name} with ${group} is set for ${d.dateTime}. ${linkText}: ${url}`;
         if (d.rsvpPrompt) msg += ' Reply 1=Yes, 2=No, 3=Maybe';
         return msg;
       },

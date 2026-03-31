@@ -1,7 +1,7 @@
 // routes/events.js
 const express = require('express');
 const crypto = require('crypto');
-const { Event, Game, User, Group, EventParticipation, UserGroup, EventRsvp } = require('../models');
+const { Event, Game, User, Group, EventParticipation, UserGroup, EventRsvp, EventBallotOption } = require('../models');
 const { Op } = require('sequelize');
 const router = express.Router();
 const auth0Service = require('../services/auth0Service');
@@ -328,7 +328,8 @@ router.post('/', validateEventCreate, async (req, res) => {
       participants, // Array of { user_id, score, faction, is_new_player, placement }
       custom_participants, // Array of { username, score, faction, is_new_player, placement }
       timezone, // User's timezone (e.g., 'America/Los_Angeles')
-      rsvp_deadline // ISO date string for RSVP/ballot close
+      rsvp_deadline, // ISO date string for RSVP/ballot close
+      ballot_options // Optional array of { game_id, game_name } for atomic ballot creation
     } = req.body;
 
     const hasPermission = await isMemberOrHigher(userId, group_id);
@@ -370,7 +371,26 @@ router.post('/', validateEventCreate, async (req, res) => {
         await EventParticipation.bulkCreate(participationData);
       }
     }
-    
+
+    // Create ballot options atomically with the event (if provided)
+    // This ensures ballot exists BEFORE notifications fire
+    let hasBallot = false;
+    if (ballot_options && Array.isArray(ballot_options) && ballot_options.length >= 2 && rsvp_deadline) {
+      const validOptions = ballot_options.filter(o => o.game_name && o.game_name.trim());
+      if (validOptions.length >= 2) {
+        const optionRows = validOptions.map((opt, index) => ({
+          event_id: event.id,
+          game_id: opt.game_id || null,
+          game_name: opt.game_name.trim(),
+          display_order: index,
+        }));
+        await EventBallotOption.bulkCreate(optionRows);
+        event.ballot_status = 'open';
+        await event.save();
+        hasBallot = true;
+      }
+    }
+
     // Fetch complete event data
     const completeEvent = await Event.findByPk(event.id, {
       include: [
@@ -475,7 +495,8 @@ router.post('/', validateEventCreate, async (req, res) => {
 
           if (recipients.length > 0) {
             const frontendUrl = process.env.FRONTEND_URL || process.env.AUTH0_BASE_URL || 'http://localhost:3000';
-            const eventUrl = `${frontendUrl}/group/${group_id}/event/${event.id}`;
+            const eventUrl = `${frontendUrl}/gameDetail?event_id=${event.id}&group_id=${group_id}`;
+            const ballotUrl = hasBallot ? `${eventUrl}#vote` : null;
 
             // Format start time for email templates
             const eventDate = new Date(start_date);
@@ -517,6 +538,7 @@ router.post('/', validateEventCreate, async (req, res) => {
                   eventUrl,
                   recipientName: user.username,
                   rsvpUrls,
+                  ballotUrl,
                 });
 
                 emailParams = {
@@ -535,7 +557,8 @@ router.post('/', validateEventCreate, async (req, res) => {
                   groupName: group.name,
                   dateTime: formattedDateTime,
                   eventUrl,
-                  rsvpPrompt: true
+                  rsvpPrompt: true,
+                  ballotUrl,
                 }
               };
             });
@@ -695,7 +718,7 @@ router.put('/:id', validateUUID('id'), validateEventUpdate, async (req, res) => 
 
         if (updateRecipients.length > 0) {
           const frontendUrl = process.env.FRONTEND_URL || process.env.AUTH0_BASE_URL || 'http://localhost:3000';
-          const eventUrl = `${frontendUrl}/group/${event.group_id}/event/${event.id}`;
+          const eventUrl = `${frontendUrl}/gameDetail?event_id=${event.id}&group_id=${event.group_id}`;
           const game = updatedEvent.Game || await Game.findByPk(event.game_id, { attributes: ['name'] });
           const group = await Group.findByPk(event.group_id, { attributes: ['name'] });
           const newEventDate = new Date(start_date);
