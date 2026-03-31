@@ -424,12 +424,16 @@ router.patch('/:user_id/notification-preferences', async (req, res) => {
       if (channels.sms !== undefined && typeof channels.sms !== 'boolean') {
         return res.status(400).json({ error: `sms must be a boolean for type: ${type}` });
       }
-      // At least one channel must be enabled per type
-      const emailEnabled = channels.email !== undefined ? channels.email : true; // default email=true
-      const smsEnabled = channels.sms !== undefined ? channels.sms : false; // default sms=false
-      if (!emailEnabled && !smsEnabled) {
-        return res.status(400).json({ error: `At least one channel must be enabled per notification type (${type})` });
-      }
+    }
+
+    // At least one channel must be enabled globally across all notification types
+    const anyEnabled = validTypes.some(type => {
+      const channels = preferences[type];
+      if (!channels) return true; // missing type defaults to email=true
+      return channels.email || channels.sms;
+    });
+    if (!anyEnabled) {
+      return res.status(400).json({ error: 'At least one notification channel must be enabled' });
     }
 
     const user = await User.findOne({ where: { user_id: userId } });
