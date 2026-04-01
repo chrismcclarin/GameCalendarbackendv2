@@ -1,7 +1,7 @@
 // routes/groups.js
 const express = require('express');
 const crypto = require('crypto');
-const { Group, User, UserGroup, Event, Game, EventParticipation, GameReview } = require('../models');
+const { Group, User, UserGroup, Event, Game, EventParticipation, GameReview, UserGame } = require('../models');
 const { Op } = require('sequelize');
 const router = express.Router();
 const { validateGroupCreate, validateGroupUpdate, validateUUID } = require('../middleware/validators');
@@ -653,6 +653,114 @@ router.put('/:group_id/settings', validateUUID('group_id'), validateGroupUpdate,
     
     res.json(group);
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get the group's shared game library (all confirmed members' games, deduplicated)
+router.get('/:group_id/library', async (req, res) => {
+  try {
+    // 1. Auth check
+    const userId = req.user?.user_id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { group_id } = req.params;
+
+    // 2. Access check - must be active member
+    const hasAccess = await isActiveMember(userId, group_id);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // 3. Get confirmed group members (exclude pending)
+    const memberRecords = await UserGroup.findAll({
+      where: {
+        group_id,
+        status: 'active',
+        role: { [Op.in]: ['member', 'admin', 'owner'] },
+      },
+      attributes: ['user_id'],
+    });
+
+    const auth0Ids = memberRecords.map(m => m.user_id);
+
+    if (auth0Ids.length === 0) {
+      return res.json({ games: [], members: [] });
+    }
+
+    // 4. Bridge Auth0 string IDs -> User UUIDs
+    const users = await User.findAll({
+      where: { user_id: { [Op.in]: auth0Ids } },
+      attributes: ['id', 'user_id', 'username'],
+    });
+
+    const userUuids = users.map(u => u.id);
+    // Map UUID -> { username, auth0Id } for owner attribution
+    const uuidToUser = {};
+    for (const u of users) {
+      uuidToUser[u.id] = { username: u.username, user_id: u.user_id };
+    }
+
+    if (userUuids.length === 0) {
+      return res.json({ games: [], members: [] });
+    }
+
+    // 5. Query all games owned by these members
+    // CRITICAL: UserGame.user_id is UUID, NOT Auth0 string
+    const userGames = await UserGame.findAll({
+      where: { user_id: { [Op.in]: userUuids } },
+      include: [{
+        model: Game,
+        required: true, // INNER JOIN - skip orphaned UserGame records
+        attributes: ['id', 'name', 'thumbnail_url', 'image_url', 'min_players', 'max_players', 'playing_time', 'weight'],
+      }],
+    });
+
+    // 6. Deduplicate games, aggregate owners
+    const gameMap = new Map();
+    for (const ug of userGames) {
+      const game = ug.Game;
+      if (!game) continue;
+
+      if (!gameMap.has(game.id)) {
+        gameMap.set(game.id, {
+          id: game.id,
+          name: game.name,
+          thumbnail_url: game.thumbnail_url,
+          image_url: game.image_url,
+          min_players: game.min_players,
+          max_players: game.max_players,
+          playing_time: game.playing_time,
+          weight: game.weight != null ? parseFloat(game.weight) : null,
+          owners: [],
+        });
+      }
+
+      const owner = uuidToUser[ug.user_id];
+      if (owner) {
+        gameMap.get(game.id).owners.push({
+          username: owner.username,
+          user_id: owner.user_id,
+        });
+      }
+    }
+
+    // 7. Sort owners alphabetically, build response
+    const games = Array.from(gameMap.values());
+    for (const game of games) {
+      game.owners.sort((a, b) => a.username.localeCompare(b.username));
+    }
+
+    // 8. Build member list sorted alphabetically
+    const members = users
+      .map(u => ({ user_id: u.user_id, username: u.username }))
+      .sort((a, b) => a.username.localeCompare(b.username));
+
+    res.json({ games, members });
+  } catch (error) {
+    console.error('Error getting group library:', error);
     res.status(500).json({ error: error.message });
   }
 });
