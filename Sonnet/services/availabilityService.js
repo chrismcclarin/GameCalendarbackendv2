@@ -317,7 +317,7 @@ class AvailabilityService {
           include: [{
             model: User,
             through: UserGroup,
-            attributes: ['id', 'user_id', 'username', 'email', 'google_calendar_enabled', 'google_calendar_token', 'google_calendar_refresh_token'],
+            attributes: ['id', 'user_id', 'username', 'email', 'google_calendar_enabled', 'google_calendar_token', 'google_calendar_refresh_token', 'timezone'],
           }],
         });
       } catch (dbError) {
@@ -334,10 +334,10 @@ class AvailabilityService {
         return [];
       }
 
-      // Calculate availability for each member
+      // Calculate availability for each member using their stored timezone
       const memberAvailabilities = await Promise.all(
-        members.map(member => 
-          this.calculateUserAvailability(member, startDate, endDate, timezone)
+        members.map(member =>
+          this.calculateUserAvailability(member, startDate, endDate, member.timezone || 'UTC')
             .then(availability => ({ member, availability }))
             .catch(error => {
               console.error(`Error calculating availability for member ${member.user_id}:`, error);
@@ -444,7 +444,7 @@ class AvailabilityService {
       include: [{
         model: User,
         through: UserGroup,
-        attributes: ['id', 'user_id', 'username', 'email', 'google_calendar_enabled', 'google_calendar_token', 'google_calendar_refresh_token'],
+        attributes: ['id', 'user_id', 'username', 'email', 'google_calendar_enabled', 'google_calendar_token', 'google_calendar_refresh_token', 'timezone'],
       }],
     });
 

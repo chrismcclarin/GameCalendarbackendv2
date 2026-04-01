@@ -3,6 +3,7 @@ const express = require('express');
 const { User, Group, UserGroup } = require('../models');
 const router = express.Router();
 const { validateUserSearch } = require('../middleware/validators');
+const { writeOperationLimiter } = require('../middleware/rateLimiter');
 const auth0Service = require('../services/auth0Service');
 
 // Search user by email
@@ -443,6 +444,43 @@ router.patch('/:user_id/notification-preferences', async (req, res) => {
 
     await user.update({ notification_preferences: preferences });
     res.json(user);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update user's timezone
+router.patch('/:user_id/timezone', writeOperationLimiter, async (req, res) => {
+  try {
+    const userId = req.user?.user_id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    if (req.params.user_id !== userId) {
+      return res.status(403).json({ error: 'Forbidden: Cannot update other users\' timezone' });
+    }
+
+    const { timezone } = req.body;
+
+    if (!timezone || typeof timezone !== 'string' || timezone.trim().length === 0) {
+      return res.status(400).json({ error: 'timezone is required and must be a non-empty string' });
+    }
+
+    // Validate IANA timezone string
+    try {
+      Intl.DateTimeFormat(undefined, { timeZone: timezone });
+    } catch {
+      return res.status(400).json({ error: 'Invalid IANA timezone string' });
+    }
+
+    const user = await User.findOne({ where: { user_id: userId } });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    await user.update({ timezone });
+    res.json({ timezone: user.timezone });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
