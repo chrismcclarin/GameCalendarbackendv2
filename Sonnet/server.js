@@ -61,6 +61,7 @@ const tokenRoutes = require('./routes/tokens');
 const inviteRoutes = require('./routes/invites');
 const friendshipRoutes = require('./routes/friendships');
 const rsvpRoutes = require('./routes/rsvp');
+const eventBringRoutes = require('./routes/eventBrings');
 const ballotRoutes = require('./routes/ballot');
 const suggestionRoutes = require('./routes/suggestions');
 
@@ -245,6 +246,7 @@ app.use('/api/magic-auth', magicAuthRoutes); // Magic link validation (no Auth0 
 app.use('/api/availability-responses', availabilityResponseRoutes); // Availability form submission (magic token auth)
 // Public invite info endpoint handled by conditional auth below
 app.use('/api/rsvp', writeOperationLimiter, rsvpRoutes); // RSVP: GET /respond is public; POST/GET/DELETE have per-route auth
+app.use('/api/event-brings', writeOperationLimiter, eventBringRoutes); // Event brings: per-route auth inside
 
 // Protected routes (require Auth0 token)
 // Apply write operation rate limiting only to POST/PUT/DELETE requests

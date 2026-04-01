@@ -2,7 +2,7 @@
 // RSVP CRUD API endpoints for event responses (yes/no/maybe)
 const express = require('express');
 const crypto = require('crypto');
-const { EventRsvp, Event, User, Game, Group } = require('../models');
+const { EventRsvp, EventBring, Event, User, Game, Group } = require('../models');
 const { validateRsvpCreate } = require('../middleware/validators');
 const { verifyAuth0Token } = require('../middleware/auth0');
 const router = express.Router();
@@ -181,6 +181,11 @@ router.post('/', verifyAuth0Token, validateRsvpCreate, async (req, res) => {
       isCreate = true;
     }
 
+    // Hard-delete bring commitments when RSVP changes to 'no' or 'maybe'
+    if (status === 'no' || status === 'maybe') {
+      await EventBring.destroy({ where: { event_id, user_id: userId } });
+    }
+
     // Re-fetch with User include for response
     const result = await EventRsvp.findByPk(rsvp.id, {
       include: [{ model: User, attributes: ['id', 'username', 'user_id'] }],
@@ -284,6 +289,9 @@ router.delete('/:rsvp_id', verifyAuth0Token, async (req, res) => {
     if (rsvp.user_id !== userId) {
       return res.status(403).json({ error: 'You can only remove your own RSVP' });
     }
+
+    // Hard-delete bring commitments when RSVP is removed
+    await EventBring.destroy({ where: { event_id: rsvp.event_id, user_id: rsvp.user_id } });
 
     await rsvp.destroy();
     return res.status(200).json({ message: 'RSVP removed' });
