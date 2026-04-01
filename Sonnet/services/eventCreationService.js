@@ -43,30 +43,42 @@ function calculateDuration(start, end) {
 /**
  * Format date for email display
  * @param {Date|string} date - Date to format
+ * @param {string} [timezone] - Optional IANA timezone string
  * @returns {string} Formatted date string (e.g., "Saturday, February 15, 2026")
  */
-function formatDateForEmail(date) {
+function formatDateForEmail(date, timezone) {
   const d = new Date(date);
-  return d.toLocaleDateString('en-US', {
+  const options = {
     weekday: 'long',
     year: 'numeric',
     month: 'long',
-    day: 'numeric'
-  });
+    day: 'numeric',
+  };
+  if (timezone) {
+    options.timeZone = timezone;
+    options.timeZoneName = 'short';
+  }
+  return d.toLocaleDateString('en-US', options);
 }
 
 /**
  * Format time for email display
  * @param {Date|string} date - Date to format
- * @returns {string} Formatted time string (e.g., "7:00 PM")
+ * @param {string} [timezone] - Optional IANA timezone string
+ * @returns {string} Formatted time string (e.g., "7:00 PM EST")
  */
-function formatTimeForEmail(date) {
+function formatTimeForEmail(date, timezone) {
   const d = new Date(date);
-  return d.toLocaleTimeString('en-US', {
+  const options = {
     hour: 'numeric',
     minute: '2-digit',
-    hour12: true
-  });
+    hour12: true,
+  };
+  if (timezone) {
+    options.timeZone = timezone;
+    options.timeZoneName = 'short';
+  }
+  return d.toLocaleTimeString('en-US', options);
 }
 
 /**
@@ -252,39 +264,40 @@ async function sendConfirmationEmails(event, users, group, game) {
     const frontendUrl = process.env.FRONTEND_URL || process.env.AUTH0_BASE_URL || 'http://localhost:3000';
     const eventUrl = `${frontendUrl}/groups/${event.group_id}/events/${event.id}`;
 
-    // Generate email content
-    const { html, text } = generateEventConfirmationEmailTemplate({
-      gameName: game?.name || 'Game Night',
-      groupName: group?.name || 'Your Group',
-      startDate: event.start_date,
-      durationMinutes: event.duration_minutes,
-      participants: users.map(u => u.username || u.name || 'Anonymous'),
-      eventUrl,
-      comments: event.comments
-    });
-
-    // Prepare recipients
-    const recipients = users
-      .filter(u => u.email)
-      .map(u => ({
-        email: u.email,
-        name: u.username || u.name
-      }));
-
-    if (recipients.length === 0) {
+    // Send individual emails per recipient to respect each user's timezone
+    const validUsers = users.filter(u => u.email);
+    if (validUsers.length === 0) {
       console.log('No valid email recipients for event confirmation');
       return;
     }
 
-    // Send batch emails
-    const result = await emailService.sendBatch(recipients, {
-      subject: `Game Night Confirmed: ${game?.name || 'Game Night'} - ${formatDateForEmail(event.start_date)}`,
-      html,
-      text,
-      groupName: group?.name
-    });
+    let sent = 0;
+    for (const user of validUsers) {
+      const recipientTz = user.timezone || 'UTC';
 
-    console.log(`Event confirmation emails: ${result.successful}/${result.total} sent`);
+      const { html, text } = generateEventConfirmationEmailTemplate({
+        gameName: game?.name || 'Game Night',
+        groupName: group?.name || 'Your Group',
+        startDate: event.start_date,
+        durationMinutes: event.duration_minutes,
+        participants: users.map(u => u.username || u.name || 'Anonymous'),
+        eventUrl,
+        comments: event.comments,
+        timezone: recipientTz,
+      });
+
+      const result = await emailService.send({
+        to: user.email,
+        subject: `Game Night Confirmed: ${game?.name || 'Game Night'} - ${formatDateForEmail(event.start_date, recipientTz)}`,
+        html,
+        text,
+        groupName: group?.name,
+      });
+
+      if (result.success) sent++;
+    }
+
+    console.log(`Event confirmation emails: ${sent}/${validUsers.length} sent`);
 
   } catch (error) {
     console.error('Error sending confirmation emails:', error);
@@ -314,15 +327,16 @@ function generateEventConfirmationEmailTemplate(data) {
     durationMinutes,
     participants,
     eventUrl,
-    comments
+    comments,
+    timezone
   } = data;
 
-  const formattedDate = formatDateForEmail(startDate);
-  const startTime = formatTimeForEmail(startDate);
+  const formattedDate = formatDateForEmail(startDate, timezone);
+  const startTime = formatTimeForEmail(startDate, timezone);
 
   // Calculate end time
   const endDate = new Date(new Date(startDate).getTime() + (durationMinutes * 60000));
-  const endTime = formatTimeForEmail(endDate);
+  const endTime = formatTimeForEmail(endDate, timezone);
 
   // Format participant list
   const participantList = participants && participants.length > 0

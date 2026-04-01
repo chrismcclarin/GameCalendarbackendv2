@@ -415,7 +415,7 @@ router.post('/', validateEventCreate, async (req, res) => {
       const group = await Group.findByPk(group_id, {
         include: [{
           model: User,
-          attributes: ['id', 'user_id', 'username', 'email', 'email_notifications_enabled', 'google_calendar_token', 'google_calendar_refresh_token', 'google_calendar_enabled', 'sms_enabled', 'phone', 'notification_preferences'],
+          attributes: ['id', 'user_id', 'username', 'email', 'email_notifications_enabled', 'google_calendar_token', 'google_calendar_refresh_token', 'google_calendar_enabled', 'sms_enabled', 'phone', 'notification_preferences', 'timezone'],
           through: { where: { status: 'active' }, attributes: ['role'] }
         }]
       });
@@ -498,25 +498,30 @@ router.post('/', validateEventCreate, async (req, res) => {
             const eventUrl = `${frontendUrl}/gameDetail?event_id=${event.id}&group_id=${group_id}`;
             const ballotUrl = hasBallot ? `${eventUrl}#vote` : null;
 
-            // Format start time for email templates
-            const eventDate = new Date(start_date);
-            const startTime = eventDate.toLocaleTimeString('en-US', {
-              hour: '2-digit',
-              minute: '2-digit',
-              hour12: false
-            });
-
-            // Format dateTime for SMS templates
-            const formattedDateTime = eventDate.toLocaleDateString('en-US', {
-              weekday: 'short',
-              month: 'short',
-              day: 'numeric',
-              hour: '2-digit',
-              minute: '2-digit',
-              hour12: true
-            });
-
             const notifyPromises = notificationService.sendToMany(recipients, 'event_created', (user) => {
+              const recipientTz = user.timezone || 'UTC';
+              const eventDate = new Date(start_date);
+
+              // Format start time for email templates (recipient's timezone)
+              const startTime = eventDate.toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false,
+                timeZone: recipientTz,
+              });
+
+              // Format dateTime for SMS templates (recipient's timezone)
+              const formattedDateTime = eventDate.toLocaleDateString('en-US', {
+                weekday: 'short',
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: true,
+                timeZone: recipientTz,
+                timeZoneName: 'short',
+              });
+
               const rsvpUrls = {
                 yesUrl: generateRsvpUrl(frontendUrl, event.id, user.user_id, 'yes'),
                 maybeUrl: generateRsvpUrl(frontendUrl, event.id, user.user_id, 'maybe'),
@@ -539,6 +544,7 @@ router.post('/', validateEventCreate, async (req, res) => {
                   recipientName: user.username,
                   rsvpUrls,
                   ballotUrl,
+                  timezone: recipientTz,
                 });
 
                 emailParams = {
@@ -689,7 +695,7 @@ router.put('/:id', validateUUID('id'), validateEventUpdate, async (req, res) => 
           },
           include: [{
             model: User,
-            attributes: ['id', 'user_id', 'username', 'email', 'email_notifications_enabled', 'sms_enabled', 'phone', 'notification_preferences'],
+            attributes: ['id', 'user_id', 'username', 'email', 'email_notifications_enabled', 'sms_enabled', 'phone', 'notification_preferences', 'timezone'],
           }],
         });
 
@@ -721,22 +727,27 @@ router.put('/:id', validateUUID('id'), validateEventUpdate, async (req, res) => 
           const eventUrl = `${frontendUrl}/gameDetail?event_id=${event.id}&group_id=${event.group_id}`;
           const game = updatedEvent.Game || await Game.findByPk(event.game_id, { attributes: ['name'] });
           const group = await Group.findByPk(event.group_id, { attributes: ['name'] });
-          const newEventDate = new Date(start_date);
-          const newTime = newEventDate.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', hour12: false,
-          });
-
-          // Format dateTime for SMS templates
-          const formattedNewDateTime = newEventDate.toLocaleDateString('en-US', {
-            weekday: 'short',
-            month: 'short',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-            hour12: true
-          });
-
           const notifyPromises = notificationService.sendToMany(updateRecipients, 'event_updated', (user) => {
+            const recipientTz = user.timezone || 'UTC';
+            const newEventDate = new Date(start_date);
+
+            const newTime = newEventDate.toLocaleTimeString('en-US', {
+              hour: '2-digit', minute: '2-digit', hour12: false,
+              timeZone: recipientTz,
+            });
+
+            // Format dateTime for SMS templates (recipient's timezone)
+            const formattedNewDateTime = newEventDate.toLocaleDateString('en-US', {
+              weekday: 'short',
+              month: 'short',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: true,
+              timeZone: recipientTz,
+              timeZoneName: 'short',
+            });
+
             // emailParams: ONLY set for email-eligible users
             let emailParams = null;
             if (user._emailEligible && user.email) {
@@ -755,6 +766,7 @@ router.put('/:id', validateUUID('id'), validateEventUpdate, async (req, res) => 
                 eventUrl,
                 recipientName: user.username,
                 rsvpUrls,
+                timezone: recipientTz,
               });
 
               emailParams = {
@@ -980,18 +992,22 @@ router.delete('/:id', async (req, res) => {
         const group = await Group.findByPk(event.group_id, { attributes: ['id', 'name'] });
         const groupUrl = `${frontendUrl}/groupHomePage?id=${group?.id || event.group_id}`;
 
-        // Format dateTime for SMS templates
-        const cancelDate = new Date(event.start_date);
-        const formattedCancelDateTime = cancelDate.toLocaleDateString('en-US', {
-          weekday: 'short',
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-          hour12: true
-        });
-
         const notifyPromises = notificationService.sendToMany(cancellationRecipients, 'event_cancelled', (user) => {
+          const recipientTz = user.timezone || 'UTC';
+          const cancelDate = new Date(event.start_date);
+
+          // Format dateTime for SMS templates (recipient's timezone)
+          const formattedCancelDateTime = cancelDate.toLocaleDateString('en-US', {
+            weekday: 'short',
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true,
+            timeZone: recipientTz,
+            timeZoneName: 'short',
+          });
+
           // emailParams: ONLY set for email-eligible users
           let emailParams = null;
           if (user._emailEligible && user.email) {
@@ -1001,6 +1017,7 @@ router.delete('/:id', async (req, res) => {
               eventDate: event.start_date,
               recipientName: user.username,
               groupUrl,
+              timezone: recipientTz,
             });
 
             emailParams = {

@@ -13,9 +13,10 @@ const DEFAULT_REMINDER_WINDOW_HOURS = 1;
  * Compute a human-friendly "time until" string
  * @param {Date} eventStart - Event start date
  * @param {Date} now - Current time
+ * @param {string} [timezone='UTC'] - IANA timezone for "today/tomorrow at" formatting
  * @returns {string} Friendly relative time string
  */
-function formatTimeUntil(eventStart, now) {
+function formatTimeUntil(eventStart, now, timezone = 'UTC') {
   const diffMs = eventStart.getTime() - now.getTime();
   const diffMinutes = Math.round(diffMs / 60000);
   const diffHours = Math.round(diffMs / 3600000);
@@ -30,18 +31,20 @@ function formatTimeUntil(eventStart, now) {
     return `in ${diffHours} hours`;
   }
 
-  // 6-24 hours: "today at HH:MM" or "tomorrow at HH:MM"
-  const eventDay = eventStart.getUTCDate();
-  const nowDay = now.getUTCDate();
-  const hours = eventStart.getUTCHours();
-  const minutes = eventStart.getUTCMinutes();
-  const period = hours >= 12 ? 'PM' : 'AM';
-  const displayHour = hours % 12 || 12;
-  const timeStr = minutes > 0
-    ? `${displayHour}:${String(minutes).padStart(2, '0')} ${period}`
-    : `${displayHour} ${period}`;
+  // 6-24 hours: "today at HH:MM TZ" or "tomorrow at HH:MM TZ"
+  // Use Intl API to format in the recipient's timezone
+  const eventDayStr = eventStart.toLocaleDateString('en-CA', { timeZone: timezone });
+  const nowDayStr = now.toLocaleDateString('en-CA', { timeZone: timezone });
 
-  if (eventDay === nowDay) {
+  const timeStr = eventStart.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: timezone,
+    timeZoneName: 'short',
+  });
+
+  if (eventDayStr === nowDayStr) {
     return `today at ${timeStr}`;
   }
   return `tomorrow at ${timeStr}`;
@@ -74,7 +77,7 @@ async function processUpcomingReminders() {
         required: true,
         include: [{
           model: User,
-          attributes: ['user_id', 'phone', 'sms_enabled', 'notification_preferences'],
+          attributes: ['user_id', 'phone', 'sms_enabled', 'notification_preferences', 'timezone'],
           where: {
             sms_enabled: true,
             phone: { [Op.ne]: null }
@@ -112,7 +115,7 @@ async function processUpcomingReminders() {
       }
 
       try {
-        const timeUntil = formatTimeUntil(event.start_date, now);
+        const timeUntil = formatTimeUntil(event.start_date, now, user.timezone || 'UTC');
 
         const result = await smsService.send({
           to: user.phone,

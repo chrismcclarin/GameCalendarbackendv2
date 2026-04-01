@@ -211,16 +211,22 @@ class EmailService {
   /**
    * Format event date for display
    * @param {Date|string} date - Date to format
+   * @param {string} [timezone] - Optional IANA timezone string
    * @returns {string} Formatted date string
    */
-  formatEventDate(date) {
+  formatEventDate(date, timezone) {
     const eventDate = new Date(date);
-    return eventDate.toLocaleDateString('en-US', {
+    const options = {
       weekday: 'long',
       year: 'numeric',
       month: 'long',
-      day: 'numeric'
-    });
+      day: 'numeric',
+    };
+    if (timezone) {
+      options.timeZone = timezone;
+      options.timeZoneName = 'short';
+    }
+    return eventDate.toLocaleDateString('en-US', options);
   }
 
   /**
@@ -419,9 +425,9 @@ This is an automated notification from Next Game Night.
    * @deprecated Use React Email templates instead (Phase 2, Plan 2)
    */
   generateGameSessionEmailTemplate(eventData) {
-    const { gameName, groupName, startDate, startTime, durationMinutes, location, comments, eventUrl, recipientName, rsvpUrls, ballotUrl } = eventData;
+    const { gameName, groupName, startDate, startTime, durationMinutes, location, comments, eventUrl, recipientName, rsvpUrls, ballotUrl, timezone } = eventData;
 
-    const formattedDate = this.formatEventDate(startDate);
+    const formattedDate = this.formatEventDate(startDate, timezone);
     const endTime = this.calculateEndTime(startTime, durationMinutes);
 
     // RSVP buttons HTML (table-based layout for email compatibility)
@@ -635,8 +641,8 @@ You can manage your notification preferences in your profile: ${this.frontendUrl
    * @param {Object} [params.rsvpUrls] - Optional RSVP button URLs { yesUrl, maybeUrl, noUrl }
    * @returns {{html: string, text: string}} Email content
    */
-  generateDateChangeEmailTemplate({ gameName, groupName, newDate, newTime, durationMinutes, eventUrl, recipientName, rsvpUrls }) {
-    const formattedDate = this.formatEventDate(newDate);
+  generateDateChangeEmailTemplate({ gameName, groupName, newDate, newTime, durationMinutes, eventUrl, recipientName, rsvpUrls, timezone }) {
+    const formattedDate = this.formatEventDate(newDate, timezone);
     const endTime = this.calculateEndTime(newTime, durationMinutes);
 
     // RSVP buttons HTML (reusable, same as game session template)
@@ -769,8 +775,8 @@ You can manage your notification preferences in your profile: ${this.frontendUrl
    * @param {string} params.groupUrl - URL to the group page
    * @returns {{html: string, text: string}} Email content
    */
-  generateCancellationEmailTemplate({ gameName, groupName, eventDate, recipientName, groupUrl }) {
-    const formattedDate = this.formatEventDate(eventDate);
+  generateCancellationEmailTemplate({ gameName, groupName, eventDate, recipientName, groupUrl, timezone }) {
+    const formattedDate = this.formatEventDate(eventDate, timezone);
 
     const html = `
 <!DOCTYPE html>
