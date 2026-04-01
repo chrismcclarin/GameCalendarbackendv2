@@ -22,6 +22,7 @@ const Feedback = require('./Feedback');
 const Friendship = require('./Friendship');
 const GroupInvite = require('./GroupInvite');
 const EventRsvp = require('./EventRsvp');
+const EventBring = require('./EventBring');
 const EventBallotOption = require('./EventBallotOption');
 const EventBallotVote = require('./EventBallotVote');
 const SentNotification = require('./SentNotification');
@@ -160,6 +161,15 @@ EventRsvp.belongsTo(Event, { foreignKey: 'event_id' });
 User.hasMany(EventRsvp, { foreignKey: 'user_id', sourceKey: 'user_id' });
 EventRsvp.belongsTo(User, { foreignKey: 'user_id', targetKey: 'user_id' });
 
+// Event Brings (games users commit to bring)
+Event.hasMany(EventBring, { foreignKey: 'event_id' });
+EventBring.belongsTo(Event, { foreignKey: 'event_id' });
+// Note: Uses sourceKey/targetKey because user_id is STRING (Auth0 ID), not UUID
+User.hasMany(EventBring, { foreignKey: 'user_id', sourceKey: 'user_id' });
+EventBring.belongsTo(User, { foreignKey: 'user_id', targetKey: 'user_id' });
+Game.hasMany(EventBring, { foreignKey: 'game_id' });
+EventBring.belongsTo(Game, { foreignKey: 'game_id' });
+
 // Event Ballot Options (game options for voting)
 Event.hasMany(EventBallotOption, { foreignKey: 'event_id' });
 EventBallotOption.belongsTo(Event, { foreignKey: 'event_id' });
@@ -202,6 +212,7 @@ module.exports = {
   Friendship,
   GroupInvite,
   EventRsvp,
+  EventBring,
   EventBallotOption,
   EventBallotVote,
   SentNotification,
