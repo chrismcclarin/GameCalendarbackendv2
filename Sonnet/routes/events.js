@@ -612,6 +612,7 @@ router.put('/:id', validateUUID('id'), validateEventUpdate, async (req, res) => 
     }
     
     const {
+      game_id,
       start_date,
       duration_minutes,
       winner_id,
@@ -629,6 +630,7 @@ router.put('/:id', validateUUID('id'), validateEventUpdate, async (req, res) => 
     const oldStartDate = event.start_date;
 
     await event.update({
+      game_id: game_id !== undefined ? (game_id || null) : event.game_id,
       start_date,
       duration_minutes,
       winner_id: winner_id || null,
