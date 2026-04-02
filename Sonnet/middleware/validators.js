@@ -190,9 +190,15 @@ const validateEventUpdate = [
     .isISO8601()
     .withMessage('Start date must be a valid ISO 8601 date'),
   body('duration_minutes')
-    .optional()
-    .isInt({ min: 1, max: 1440 })
-    .withMessage('Duration must be between 1 and 1440 minutes (24 hours) when provided'),
+    .optional({ nullable: true })
+    .custom((value) => {
+      if (value === null || value === undefined || value === '') return true;
+      const num = Number(value);
+      if (!Number.isInteger(num) || num < 1 || num > 1440) {
+        throw new Error('Duration must be between 1 and 1440 minutes (24 hours) when provided');
+      }
+      return true;
+    }),
   body('comments')
     .optional()
     .isLength({ max: 2000 })
