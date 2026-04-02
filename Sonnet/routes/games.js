@@ -248,12 +248,28 @@ router.post('/import-bgg/:bgg_id', async (req, res) => {
     // Check if game already exists
     const existingGame = await Game.findOne({ where: { bgg_id } });
     if (existingGame) {
+      // If existing record is missing key data (e.g. from CSV import), backfill from BGG API
+      if (!existingGame.image_url || !existingGame.min_players) {
+        try {
+          const bggData = await bggService.getGameById(bgg_id);
+          await existingGame.update({
+            min_players: existingGame.min_players || bggData.min_players,
+            max_players: existingGame.max_players || bggData.max_players,
+            playing_time: existingGame.playing_time || bggData.playing_time,
+            description: existingGame.description || bggData.description,
+            image_url: bggData.image_url || existingGame.image_url,
+            thumbnail_url: bggData.thumbnail_url || existingGame.thumbnail_url,
+          });
+        } catch (backfillError) {
+          console.warn('BGG backfill failed (non-fatal):', backfillError.message);
+        }
+      }
       return res.json(existingGame);
     }
-    
+
     // Fetch from BGG API
     const bggData = await bggService.getGameById(bgg_id);
-    
+
     const game = await Game.create({
       bgg_id: parseInt(bgg_id),
       name: bggData.name,
@@ -266,7 +282,7 @@ router.post('/import-bgg/:bgg_id', async (req, res) => {
       thumbnail_url: bggData.thumbnail_url,
       is_custom: false
     });
-    
+
     res.json(game);
   } catch (error) {
     res.status(500).json({ error: error.message });
