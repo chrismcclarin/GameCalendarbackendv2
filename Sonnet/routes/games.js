@@ -109,13 +109,28 @@ router.get('/search-all', async (req, res) => {
       }
     }
 
-    // BGG search
+    // BGG search: local CSV first, then live API fallback if few results
     let bgg = [];
     try {
       bgg = await bggCsvService.searchGames(query.trim(), 20);
     } catch (bggError) {
-      console.warn('BGG search error (non-fatal):', bggError.message);
-      // Continue with empty BGG results
+      console.warn('BGG CSV search error (non-fatal):', bggError.message);
+    }
+
+    // If CSV returned fewer than 5 results, also search the live BGG API
+    if (bgg.length < 5) {
+      try {
+        const apiResults = await bggService.searchGames(query.trim());
+        // Merge API results, skipping any already found in CSV results
+        const existingBggIds = new Set(bgg.map(g => g.bgg_id));
+        const newApiResults = (apiResults || [])
+          .filter(g => !existingBggIds.has(g.bgg_id))
+          .slice(0, 20 - bgg.length);
+        bgg = [...bgg, ...newApiResults];
+      } catch (apiError) {
+        console.warn('BGG API search error (non-fatal):', apiError.message);
+        // Continue with whatever CSV results we have
+      }
     }
 
     res.json({ local, bgg });
