@@ -48,9 +48,9 @@ const User = sequelize.define('User', {
     // IANA timezone format (e.g., America/New_York, Europe/London)
     // Used for displaying times in user's preferred timezone
   },
-  tutorial_completed: {
-    type: DataTypes.BOOLEAN,
-    defaultValue: false,
+  tutorial_version: {
+    type: DataTypes.INTEGER,
+    defaultValue: 0,
     allowNull: false,
   },
   phone: {
