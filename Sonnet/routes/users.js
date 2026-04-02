@@ -235,7 +235,7 @@ router.get('/:user_id', async (req, res) => {
   }
 });
 
-// Mark tutorial as completed
+// Mark tutorial as completed (with version tracking)
 router.put('/:user_id/tutorial', async (req, res) => {
   try {
     const userId = req.user?.user_id;
@@ -252,8 +252,10 @@ router.put('/:user_id/tutorial', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    await user.update({ tutorial_completed: true });
-    res.json({ tutorial_completed: true });
+    // Accept version from body, default to 2 (current tutorial version)
+    const version = req.body.version != null ? parseInt(req.body.version, 10) : 2;
+    await user.update({ tutorial_version: version });
+    res.json({ tutorial_version: version });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -276,8 +278,8 @@ router.delete('/:user_id/tutorial', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    await user.update({ tutorial_completed: false });
-    res.json({ tutorial_completed: false });
+    await user.update({ tutorial_version: 0 });
+    res.json({ tutorial_version: 0 });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
