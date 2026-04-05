@@ -415,7 +415,7 @@ router.post('/', validateEventCreate, async (req, res) => {
       const group = await Group.findByPk(group_id, {
         include: [{
           model: User,
-          attributes: ['id', 'user_id', 'username', 'email', 'email_notifications_enabled', 'google_calendar_token', 'google_calendar_refresh_token', 'google_calendar_enabled', 'sms_enabled', 'phone', 'notification_preferences', 'timezone'],
+          attributes: ['id', 'user_id', 'username', 'email', 'email_notifications_enabled', 'google_calendar_token', 'google_calendar_refresh_token', 'google_calendar_enabled', 'sms_enabled', 'phone', 'phone_verified', 'notification_preferences', 'timezone'],
           through: { where: { status: 'active' }, attributes: ['role'] }
         }]
       });
@@ -697,7 +697,7 @@ router.put('/:id', validateUUID('id'), validateEventUpdate, async (req, res) => 
           },
           include: [{
             model: User,
-            attributes: ['id', 'user_id', 'username', 'email', 'email_notifications_enabled', 'sms_enabled', 'phone', 'notification_preferences', 'timezone'],
+            attributes: ['id', 'user_id', 'username', 'email', 'email_notifications_enabled', 'sms_enabled', 'phone', 'phone_verified', 'notification_preferences', 'timezone'],
           }],
         });
 
@@ -961,7 +961,7 @@ router.delete('/:id', async (req, res) => {
         },
         include: [{
           model: User,
-          attributes: ['id', 'user_id', 'username', 'email', 'email_notifications_enabled', 'sms_enabled', 'phone', 'notification_preferences'],
+          attributes: ['id', 'user_id', 'username', 'email', 'email_notifications_enabled', 'sms_enabled', 'phone', 'phone_verified', 'notification_preferences'],
         }],
       });
 

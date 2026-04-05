@@ -123,12 +123,19 @@ class NotificationService {
   async sendToMany(users, type, payloadBuilder) {
     if (!users || users.length === 0) return [];
 
+    console.log(`[NotificationService] sendToMany: type=${type}, recipients=${users.length}`);
     const results = [];
     const promises = users.map(async (user) => {
-      const payload = payloadBuilder(user);
-      const result = await this.send(user, type, payload);
-      results.push({ userId: user.user_id, ...result });
-      return result;
+      try {
+        const payload = payloadBuilder(user);
+        const result = await this.send(user, type, payload);
+        console.log(`[NotificationService] ${type} for ${user.user_id}: email=${result.email?.success ?? 'skipped'}, sms=${result.sms?.success ?? 'skipped'}`);
+        results.push({ userId: user.user_id, ...result });
+        return result;
+      } catch (error) {
+        console.error(`[NotificationService] sendToMany failed for user=${user.user_id}, type=${type}:`, error.message);
+        results.push({ userId: user.user_id, email: null, sms: null, error: error.message });
+      }
     });
     await Promise.allSettled(promises);
     return results;

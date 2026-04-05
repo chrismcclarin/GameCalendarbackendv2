@@ -77,7 +77,7 @@ async function processUpcomingReminders() {
         required: true,
         include: [{
           model: User,
-          attributes: ['user_id', 'phone', 'sms_enabled', 'notification_preferences', 'timezone'],
+          attributes: ['user_id', 'phone', 'phone_verified', 'sms_enabled', 'notification_preferences', 'timezone'],
           where: {
             sms_enabled: true,
             phone: { [Op.ne]: null }
