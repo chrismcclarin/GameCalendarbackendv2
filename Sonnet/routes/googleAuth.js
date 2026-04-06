@@ -61,7 +61,8 @@ const generateGoogleAuthUrl = async (user_id, email = null, username = null, fro
   
   // Generate authorization URL
   const scopes = [
-    'https://www.googleapis.com/auth/calendar.events'
+    'https://www.googleapis.com/auth/calendar.events',
+    'https://www.googleapis.com/auth/calendar.readonly'
   ];
   
   // Encode state with user_id and frontend URL (so callback knows where to redirect)
