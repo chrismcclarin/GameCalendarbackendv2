@@ -1,5 +1,5 @@
 // routes/webhooks.js
-// Webhook handlers for external service callbacks (SendGrid delivery events, Twilio inbound SMS)
+// Webhook handlers for external service callbacks (Resend delivery events, Twilio inbound SMS)
 const express = require('express');
 const crypto = require('crypto');
 const twilio = require('twilio');
@@ -10,181 +10,170 @@ const { parseReply } = require('../services/smsReplyParser');
 const { smsInboundLimiter } = require('../middleware/rateLimiter');
 
 /**
- * Verify SendGrid webhook signature using ECDSA
- * SendGrid uses the x-twilio-email-event-webhook-signature header
- * @param {string} publicKey - SendGrid verification key from dashboard
+ * Verify Resend webhook signature (Svix)
+ * Resend uses svix-id, svix-timestamp, svix-signature headers
+ * @param {string} secret - Resend webhook signing secret (whsec_...)
  * @param {string} payload - Raw request body as string
- * @param {string} signature - Signature from header
- * @param {string} timestamp - Timestamp from header
+ * @param {Object} headers - Request headers
  * @returns {boolean} True if signature is valid
  */
-function verifySendGridSignature(publicKey, payload, signature, timestamp) {
-  if (!publicKey || !signature || !timestamp) {
+function verifyResendSignature(secret, payload, headers) {
+  const svixId = headers['svix-id'];
+  const svixTimestamp = headers['svix-timestamp'];
+  const svixSignature = headers['svix-signature'];
+
+  if (!svixId || !svixTimestamp || !svixSignature) {
     return false;
   }
 
   try {
-    const timestampPayload = timestamp + payload;
-    const decodedSignature = Buffer.from(signature, 'base64');
+    // Reject timestamps older than 5 minutes to prevent replay attacks
+    const now = Math.floor(Date.now() / 1000);
+    if (Math.abs(now - parseInt(svixTimestamp)) > 300) {
+      return false;
+    }
 
-    // Wrap in PEM headers if the key is raw base64 (no headers)
-    const pemKey = publicKey.includes('-----BEGIN')
-      ? publicKey
-      : `-----BEGIN PUBLIC KEY-----\n${publicKey}\n-----END PUBLIC KEY-----`;
+    // Strip the whsec_ prefix and decode the secret
+    const secretBytes = Buffer.from(secret.replace('whsec_', ''), 'base64');
 
-    const verifier = crypto.createVerify('sha256');
-    verifier.update(timestampPayload);
+    // Build the signed content: "{svix-id}.{svix-timestamp}.{body}"
+    const signedContent = `${svixId}.${svixTimestamp}.${payload}`;
 
-    return verifier.verify(
-      {
-        key: pemKey,
-        format: 'pem',
-        type: 'spki'
-      },
-      decodedSignature
-    );
+    const expectedSignature = crypto
+      .createHmac('sha256', secretBytes)
+      .update(signedContent)
+      .digest('base64');
+
+    // svix-signature may contain multiple signatures separated by spaces (e.g. "v1,sig1 v1,sig2")
+    const signatures = svixSignature.split(' ');
+    return signatures.some(sig => {
+      const sigValue = sig.split(',')[1];
+      return sigValue && crypto.timingSafeEqual(
+        Buffer.from(expectedSignature),
+        Buffer.from(sigValue)
+      );
+    });
   } catch (error) {
-    console.error('Error verifying SendGrid webhook signature:', error.message);
+    console.error('Error verifying Resend webhook signature:', error.message);
     return false;
   }
 }
 
 /**
- * Handle SendGrid webhook events
- * Events: delivered, bounce, dropped, deferred, open, click, spam_report, unsubscribe, etc.
+ * Handle Resend webhook events
+ * Events: email.sent, email.delivered, email.bounced, email.complained,
+ *         email.delivery_delayed, email.opened, email.clicked
  *
- * POST /api/webhooks/sendgrid
+ * POST /api/webhooks/resend
  */
-router.post('/sendgrid', async (req, res) => {
-  // req.body is already parsed by global express.json(); raw bytes are in req.rawBody (set via verify callback)
+router.post('/resend', async (req, res) => {
   const rawBody = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body);
 
-  const publicKey = process.env.SENDGRID_WEBHOOK_VERIFICATION_KEY;
-  const signature = req.headers['x-twilio-email-event-webhook-signature'];
-  const timestamp = req.headers['x-twilio-email-event-webhook-timestamp'];
+  const signingSecret = process.env.RESEND_WEBHOOK_SECRET;
 
-  // Verify signature if verification key is configured
-  if (publicKey) {
-    if (!verifySendGridSignature(publicKey, rawBody, signature, timestamp)) {
-      console.warn('SendGrid webhook signature verification failed.');
+  if (signingSecret) {
+    if (!verifyResendSignature(signingSecret, rawBody, req.headers)) {
+      console.warn('Resend webhook signature verification failed.');
       return res.status(401).json({ error: 'Invalid signature' });
     }
   } else {
-    // Log warning but allow through in development (for testing)
     if (process.env.NODE_ENV === 'production') {
-      console.warn('SENDGRID_WEBHOOK_VERIFICATION_KEY not configured. Rejecting webhook in production.');
+      console.warn('RESEND_WEBHOOK_SECRET not configured. Rejecting webhook in production.');
       return res.status(401).json({ error: 'Webhook verification not configured' });
     }
-    console.warn('SENDGRID_WEBHOOK_VERIFICATION_KEY not configured. Allowing webhook in development.');
+    console.warn('RESEND_WEBHOOK_SECRET not configured. Allowing webhook in development.');
   }
 
-  // SendGrid sends an array of events
-  const events = Array.isArray(req.body) ? req.body : [req.body];
+  const { type, data } = req.body;
+  const emailId = data?.email_id || 'unknown';
+  const toEmail = Array.isArray(data?.to) ? data.to[0] : data?.to;
+  // Extract prompt_id from Resend tags array
+  const promptIdTag = data?.tags?.find?.(t => t.name === 'prompt_id');
+  const promptId = promptIdTag?.value || null;
 
-  for (const event of events) {
-    const { event: eventType, email, sg_message_id, reason } = event;
+  switch (type) {
+    case 'email.sent':
+      console.log(`[Resend] Email sent - ID: ${emailId}, To: ${maskEmail(toEmail)}`);
+      break;
 
-    // Log event based on type
-    // These logs are admin-only visibility (console/server logs)
-    switch (eventType) {
-      case 'processed':
-        console.log(`[SendGrid] Email processed - ID: ${sg_message_id}, To: ${maskEmail(email)}`);
-        break;
+    case 'email.delivered':
+      console.log(`[Resend] Email delivered - ID: ${emailId}, To: ${maskEmail(toEmail)}`);
+      try {
+        await EmailMetrics.create({
+          sg_message_id: emailId,
+          event_type: 'delivered',
+          email_hash: toEmail ? crypto.createHash('sha256').update(toEmail).digest('hex') : null,
+          prompt_id: promptId,
+          occurred_at: new Date(data.created_at || Date.now()),
+          sg_machine_open: false,
+          source_type: 'resend_live'
+        });
+      } catch (e) { console.error('[Webhooks] Failed to persist delivered event:', e.message); }
+      break;
 
-      case 'delivered':
-        console.log(`[SendGrid] Email delivered - ID: ${sg_message_id}, To: ${maskEmail(email)}`);
-        try {
-          await EmailMetrics.create({
-            sg_message_id: sg_message_id || 'unknown',
-            event_type: 'delivered',
-            email_hash: email ? crypto.createHash('sha256').update(email).digest('hex') : null,
-            prompt_id: event.prompt_id || null,
-            occurred_at: new Date(event.timestamp * 1000 || Date.now()),
-            sg_machine_open: false,
-            source_type: 'sendgrid_live'
-          });
-        } catch (e) { console.error('[Webhooks] Failed to persist delivered event:', e.message); }
-        break;
+    case 'email.bounced':
+      console.error(`[Resend] Email bounced - ID: ${emailId}, To: ${maskEmail(toEmail)}`);
+      try {
+        await EmailMetrics.create({
+          sg_message_id: emailId,
+          event_type: 'bounce',
+          email_hash: toEmail ? crypto.createHash('sha256').update(toEmail).digest('hex') : null,
+          prompt_id: promptId,
+          occurred_at: new Date(data.created_at || Date.now()),
+          sg_machine_open: false,
+          source_type: 'resend_live'
+        });
+      } catch (e) { console.error('[Webhooks] Failed to persist bounce event:', e.message); }
+      break;
 
-      case 'bounce':
-        console.error(`[SendGrid] Email bounced - ID: ${sg_message_id}, To: ${maskEmail(email)}, Reason: ${reason || 'Unknown'}`);
-        try {
-          await EmailMetrics.create({
-            sg_message_id: sg_message_id || 'unknown',
-            event_type: 'bounce',
-            email_hash: email ? crypto.createHash('sha256').update(email).digest('hex') : null,
-            prompt_id: event.prompt_id || null,
-            occurred_at: new Date(event.timestamp * 1000 || Date.now()),
-            sg_machine_open: false,
-            source_type: 'sendgrid_live'
-          });
-        } catch (e) { console.error('[Webhooks] Failed to persist bounce event:', e.message); }
-        break;
+    case 'email.complained':
+      console.warn(`[Resend] Spam complaint - ID: ${emailId}, To: ${maskEmail(toEmail)}`);
+      try {
+        await EmailMetrics.create({
+          sg_message_id: emailId,
+          event_type: 'spamreport',
+          email_hash: toEmail ? crypto.createHash('sha256').update(toEmail).digest('hex') : null,
+          prompt_id: promptId,
+          occurred_at: new Date(data.created_at || Date.now()),
+          sg_machine_open: false,
+          source_type: 'resend_live'
+        });
+      } catch (e) { console.error('[Webhooks] Failed to persist spamreport event:', e.message); }
+      break;
 
-      case 'dropped':
-        console.error(`[SendGrid] Email dropped - ID: ${sg_message_id}, To: ${maskEmail(email)}, Reason: ${reason || 'Unknown'}`);
-        break;
+    case 'email.delivery_delayed':
+      console.warn(`[Resend] Email delivery delayed - ID: ${emailId}, To: ${maskEmail(toEmail)}`);
+      break;
 
-      case 'deferred':
-        console.warn(`[SendGrid] Email deferred - ID: ${sg_message_id}, To: ${maskEmail(email)}`);
-        break;
+    case 'email.opened':
+      console.log(`[Resend] Email opened - ID: ${emailId}, To: ${maskEmail(toEmail)}`);
+      try {
+        await EmailMetrics.create({
+          sg_message_id: emailId,
+          event_type: 'open',
+          email_hash: toEmail ? crypto.createHash('sha256').update(toEmail).digest('hex') : null,
+          prompt_id: promptId,
+          occurred_at: new Date(data.created_at || Date.now()),
+          sg_machine_open: false,
+          source_type: 'resend_live'
+        });
+      } catch (e) { console.error('[Webhooks] Failed to persist open event:', e.message); }
+      break;
 
-      case 'spamreport':
-        console.warn(`[SendGrid] Spam report received - ID: ${sg_message_id}, To: ${maskEmail(email)}`);
-        try {
-          await EmailMetrics.create({
-            sg_message_id: sg_message_id || 'unknown',
-            event_type: 'spamreport',
-            email_hash: email ? crypto.createHash('sha256').update(email).digest('hex') : null,
-            prompt_id: event.prompt_id || null,
-            occurred_at: new Date(event.timestamp * 1000 || Date.now()),
-            sg_machine_open: false,
-            source_type: 'sendgrid_live'
-          });
-        } catch (e) { console.error('[Webhooks] Failed to persist spamreport event:', e.message); }
-        break;
+    case 'email.clicked':
+      console.log(`[Resend] Link clicked - ID: ${emailId}, To: ${maskEmail(toEmail)}`);
+      break;
 
-      case 'unsubscribe':
-        console.warn(`[SendGrid] Unsubscribe request - ID: ${sg_message_id}, To: ${maskEmail(email)}`);
-        // TODO: In future phases, update user preferences
-        break;
-
-      case 'open':
-        // CRITICAL: Exclude machine/bot opens — Apple MPP and security gateways auto-open every email
-        if (!event.sg_machine_open) {
-          console.log(`[SendGrid] Email opened (human) - ID: ${sg_message_id}, To: ${maskEmail(email)}`);
-          try {
-            await EmailMetrics.create({
-              sg_message_id: sg_message_id || 'unknown',
-              event_type: 'open',
-              email_hash: email ? crypto.createHash('sha256').update(email).digest('hex') : null,
-              prompt_id: event.prompt_id || null,
-              occurred_at: new Date(event.timestamp * 1000 || Date.now()),
-              sg_machine_open: false,
-              source_type: 'sendgrid_live'
-            });
-          } catch (e) { console.error('[Webhooks] Failed to persist open event:', e.message); }
-        } else {
-          console.log(`[SendGrid] Machine open filtered - ID: ${sg_message_id}`);
-        }
-        break;
-
-      case 'click':
-        console.log(`[SendGrid] Link clicked - ID: ${sg_message_id}, To: ${maskEmail(email)}`);
-        break;
-
-      default:
-        console.log(`[SendGrid] Event: ${eventType} - ID: ${sg_message_id}`);
-    }
+    default:
+      console.log(`[Resend] Event: ${type} - ID: ${emailId}`);
   }
 
-  // Always return 200 to acknowledge receipt (prevents SendGrid retries)
-  res.status(200).json({ received: true, count: events.length });
+  res.status(200).json({ received: true });
 });
 
-// Keep Resend endpoint for backward compatibility (can be removed later)
-router.post('/resend', express.json(), (req, res) => {
-  console.warn('[Webhooks] Received request to deprecated /resend endpoint. Use /sendgrid instead.');
+// Legacy SendGrid endpoint — returns 200 but does nothing
+router.post('/sendgrid', (req, res) => {
+  console.warn('[Webhooks] Received request to deprecated /sendgrid endpoint. Use /resend instead.');
   res.status(200).json({ received: true, deprecated: true });
 });
 

@@ -1,20 +1,19 @@
 // services/emailService.js
-// Email service for sending notifications using SendGrid API
-const sgMail = require('@sendgrid/mail');
+// Email service for sending notifications using Resend API
+const { Resend } = require('resend');
 
 class EmailService {
   constructor() {
-    this.apiKey = process.env.SENDGRID_API_KEY;
+    this.apiKey = process.env.RESEND_API_KEY;
     this.fromEmail = process.env.FROM_EMAIL || 'schedule@nextgamenight.app';
     this.frontendUrl = process.env.FRONTEND_URL || process.env.AUTH0_BASE_URL || 'http://localhost:3000';
 
-    // Initialize SendGrid client if API key is configured
     if (this.apiKey) {
-      sgMail.setApiKey(this.apiKey);
-      console.log('SendGrid email service initialized.');
+      this.resend = new Resend(this.apiKey);
+      console.log('Resend email service initialized.');
       console.log(`   From: ${this.fromEmail}`);
     } else {
-      console.warn('SendGrid email service not configured (SENDGRID_API_KEY not set).');
+      console.warn('Resend email service not configured (RESEND_API_KEY not set).');
       if (process.env.NODE_ENV === 'production') {
         console.warn('WARNING: Email notifications will be disabled in production!');
       }
@@ -23,14 +22,14 @@ class EmailService {
 
   /**
    * Check if email service is configured
-   * @returns {boolean} True if SendGrid API key is set
+   * @returns {boolean} True if Resend API key is set
    */
   isConfigured() {
-    return !!this.apiKey;
+    return !!this.apiKey && !!this.resend;
   }
 
   /**
-   * Send a single email via SendGrid API
+   * Send a single email via Resend API
    * @param {Object} options - Email options
    * @param {string|string[]} options.to - Recipient email(s)
    * @param {string} options.subject - Email subject
@@ -38,7 +37,7 @@ class EmailService {
    * @param {string} [options.text] - Plain text content
    * @param {string} [options.replyTo] - Reply-to address (typically group owner)
    * @param {string} [options.groupName] - Group name for from field
-   * @param {string} [options.promptId] - Availability prompt ID for webhook attribution via customArgs
+   * @param {string} [options.promptId] - Availability prompt ID for webhook attribution via tags
    * @param {string} [options.emailType] - Email type label (e.g. 'availability_prompt', 'reminder')
    * @returns {Promise<{success: boolean, id?: string, error?: string}>}
    */
@@ -49,54 +48,50 @@ class EmailService {
     }
 
     try {
-      // Format the from field: "[Group Name] via NextGameNight" or just the email
       const fromName = groupName
         ? `${groupName} via NextGameNight`
         : 'NextGameNight';
 
-      // Ensure plain text fallback is always present for multipart emails
       // Multipart (text + html) emails score better with spam filters
       const plainText = text || (html ? html.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim() : '');
 
       const msg = {
+        from: `${fromName} <${this.fromEmail}>`,
         to: Array.isArray(to) ? to : [to],
-        from: {
-          email: this.fromEmail,
-          name: fromName
-        },
         subject,
         ...(html && { html }),
         ...(plainText && { text: plainText }),
-        ...(replyTo && { replyTo }),
-        // List-Unsubscribe headers signal legitimacy to email providers and reduce spam scoring
+        ...(replyTo && { reply_to: replyTo }),
         headers: {
           'List-Unsubscribe': `<mailto:unsubscribe@nextgamenight.app>`,
           'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
         },
-        // SendGrid categories help with analytics and diagnosing which email types perform
-        categories: [emailType || 'notification'],
-        // customArgs enables webhook event attribution back to the originating prompt
-        // SendGrid passes these through on open/delivered/bounce/spamreport events
-        ...(promptId && { customArgs: { prompt_id: String(promptId), email_type: emailType || 'notification' } }),
+        // Resend tags for analytics and webhook attribution
+        tags: [
+          { name: 'category', value: emailType || 'notification' },
+          ...(promptId ? [{ name: 'prompt_id', value: String(promptId) }] : [])
+        ],
         ...(attachments && attachments.length > 0 && { attachments })
       };
 
-      const response = await sgMail.send(msg);
+      const { data, error } = await this.resend.emails.send(msg);
 
-      // SendGrid returns message ID in headers
-      const messageId = response[0]?.headers?.['x-message-id'];
-      console.log(`Email sent successfully. ID: ${messageId || 'unknown'}`);
-      return { success: true, id: messageId };
+      if (error) {
+        console.error(`Email send failed: ${error.message}`);
+        return { success: false, error: error.message };
+      }
+
+      console.log(`Email sent successfully. ID: ${data.id}`);
+      return { success: true, id: data.id };
     } catch (error) {
-      const errorMessage = error.response?.body?.errors?.[0]?.message || error.message;
-      console.error(`Email send failed: ${errorMessage}`);
-      return { success: false, error: errorMessage };
+      console.error(`Email send failed: ${error.message}`);
+      return { success: false, error: error.message };
     }
   }
 
   /**
    * Send emails to multiple recipients (batch send)
-   * SendGrid allows max 1000 emails per API call
+   * Sends individually via Resend API, chunked into batches of 100
    * @param {Array<{email: string, name?: string, data?: Object}>} recipients - List of recipients
    * @param {Object} options - Email options (shared across all recipients)
    * @param {string} options.subject - Email subject

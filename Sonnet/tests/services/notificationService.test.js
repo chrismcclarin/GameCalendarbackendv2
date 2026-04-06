@@ -260,7 +260,7 @@ describe('notificationService', () => {
         notification_preferences: null
       };
 
-      emailService.send.mockRejectedValue(new Error('SendGrid timeout'));
+      emailService.send.mockRejectedValue(new Error('Resend timeout'));
 
       const payload = {
         emailParams: { to: 'user@test.com', subject: 'Test', html: '<p>hi</p>' },
@@ -269,7 +269,7 @@ describe('notificationService', () => {
 
       const results = await notificationService.send(user, 'event_confirmation', payload);
 
-      expect(results.email).toEqual({ success: false, error: 'SendGrid timeout' });
+      expect(results.email).toEqual({ success: false, error: 'Resend timeout' });
       expect(results.sms).toBeNull();
     });
 

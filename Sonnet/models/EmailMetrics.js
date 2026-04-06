@@ -1,5 +1,5 @@
 // models/EmailMetrics.js
-// Tracks SendGrid email engagement events for monitoring dashboard
+// Tracks email engagement events (Resend/legacy SendGrid) for monitoring dashboard
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
 
