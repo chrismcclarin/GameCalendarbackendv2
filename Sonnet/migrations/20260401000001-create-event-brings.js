@@ -59,3 +59,11 @@ module.exports = {
     await queryInterface.dropTable('EventBrings');
   },
 };
+
+if (require.main === module) {
+  const sequelize = require('../config/database');
+  const { Sequelize } = require('sequelize');
+  module.exports.up(sequelize.getQueryInterface(), Sequelize)
+    .then(() => { console.log('EventBrings table created.'); return sequelize.close(); })
+    .catch(err => { console.error(err); process.exit(1); });
+}
