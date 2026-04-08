@@ -75,6 +75,13 @@ const User = sequelize.define('User', {
     allowNull: false,
     defaultValue: false,
   },
+  // Timestamp of welcome/opt-in confirmation SMS. Null = not yet sent.
+  // Used to ensure CTIA-required welcome message fires exactly once per user.
+  sms_welcome_sent_at: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    defaultValue: null,
+  },
   // Shape: { [type]: { email: bool, sms: bool } } -- null = use defaults
   notification_preferences: {
     type: DataTypes.JSONB,

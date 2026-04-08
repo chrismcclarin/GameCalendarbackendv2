@@ -67,6 +67,14 @@ class SmsService {
   buildMessage(type, data) {
     const d = data || {};
 
+    // CTIA-required opt-in confirmation. Sent exactly once on first SMS opt-in.
+    // Contains all carrier-required disclosures (brand, frequency, rates, HELP, STOP).
+    // Static template -- no variables -- to keep length predictable (single segment).
+    const welcomeTemplate = {
+      sms_welcome: () =>
+        `NextGameNight: You're subscribed to game night alerts. Msg frequency varies. Msg & data rates may apply. Reply HELP for help, STOP to unsubscribe.`
+    };
+
     // Phase 49 legacy templates (unchanged behavior)
     const legacyTemplates = {
       event_confirmation: () =>
@@ -123,12 +131,21 @@ class SmsService {
 
     let message;
 
-    if (eventTemplates[type]) {
+    if (welcomeTemplate[type]) {
+      // Welcome message has its own opt-out language baked in -- skip suffix below.
+      message = welcomeTemplate[type]();
+    } else if (eventTemplates[type]) {
       message = eventTemplates[type]();
     } else if (legacyTemplates[type]) {
       message = legacyTemplates[type]();
     } else {
       message = `NextGameNight notification: ${d.actionUrl || 'Check the app for details'}`;
+    }
+
+    // CTIA / carrier compliance: append opt-out reminder to every recurring message.
+    // Welcome message already includes STOP/HELP language, so it's exempt.
+    if (type !== 'sms_welcome') {
+      message += ' Reply STOP to opt out';
     }
 
     // Truncate to 306 chars (2 GSM-7 segments)

@@ -5,6 +5,7 @@ const router = express.Router();
 const { validateUserSearch } = require('../middleware/validators');
 const { writeOperationLimiter } = require('../middleware/rateLimiter');
 const auth0Service = require('../services/auth0Service');
+const smsService = require('../services/smsService');
 
 // Search user by email
 // Searches both our database and Auth0
@@ -445,6 +446,37 @@ router.patch('/:user_id/notification-preferences', async (req, res) => {
     }
 
     await user.update({ notification_preferences: preferences });
+
+    // CTIA / carrier compliance: send one-time welcome SMS the first time a user
+    // opts in to any SMS notification. Idempotent via sms_welcome_sent_at timestamp.
+    // Failure is non-fatal -- preference save still succeeds.
+    const anySmsEnabled = Object.values(preferences).some(
+      (channels) => channels && channels.sms === true
+    );
+    const shouldSendWelcome = (
+      anySmsEnabled &&
+      !user.sms_welcome_sent_at &&
+      user.sms_enabled &&
+      user.phone &&
+      user.phone_verified
+    );
+    if (shouldSendWelcome) {
+      try {
+        const result = await smsService.send({
+          to: user.phone,
+          type: 'sms_welcome',
+          data: {},
+        });
+        if (result.success) {
+          await user.update({ sms_welcome_sent_at: new Date() });
+        } else {
+          console.warn(`[users] Welcome SMS not sent for ${userId}: ${result.error}`);
+        }
+      } catch (error) {
+        console.error(`[users] Welcome SMS error for ${userId}:`, error.message);
+      }
+    }
+
     res.json(user);
   } catch (error) {
     res.status(500).json({ error: error.message });
