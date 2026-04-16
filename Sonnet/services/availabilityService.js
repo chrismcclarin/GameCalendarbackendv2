@@ -4,6 +4,74 @@
 const { UserAvailability, User } = require('../models');
 const googleCalendarService = require('./googleCalendarService');
 
+/**
+ * Validate an IANA timezone string.
+ * @param {string} tz
+ * @returns {boolean}
+ */
+function isValidTimezone(tz) {
+  if (!tz || typeof tz !== 'string') return false;
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Convert a local date + hour in a given timezone to UTC date + hour.
+ * Handles DST correctly by using Intl offset measurement.
+ *
+ * @param {string} localDateStr - 'YYYY-MM-DD' in local timezone
+ * @param {number} localHour - 0-23 in local timezone
+ * @param {string} timezone - IANA timezone string
+ * @returns {{ utcDate: string, utcHour: number }}
+ */
+function localToUtc(localDateStr, localHour, timezone) {
+  // Start with a naive guess: treat local time as UTC
+  const naiveUtc = new Date(`${localDateStr}T${String(localHour).padStart(2, '0')}:00:00Z`);
+
+  // Get what local hour this UTC time maps to in the target timezone
+  const localResult = parseInt(
+    new Intl.DateTimeFormat('en-GB', {
+      timeZone: timezone,
+      hour: '2-digit',
+      hour12: false,
+    }).format(naiveUtc),
+    10
+  );
+
+  // The difference tells us the offset; adjust to get correct UTC time
+  const offsetHours = localResult - localHour;
+  const correctedUtc = new Date(naiveUtc.getTime() - offsetHours * 3600000);
+
+  // Verify and re-adjust for DST edge cases
+  const verifyHour = parseInt(
+    new Intl.DateTimeFormat('en-GB', {
+      timeZone: timezone,
+      hour: '2-digit',
+      hour12: false,
+    }).format(correctedUtc),
+    10
+  );
+
+  let finalUtc = correctedUtc;
+  if (verifyHour !== localHour) {
+    const delta = (localHour - verifyHour) * 3600000;
+    finalUtc = new Date(correctedUtc.getTime() + delta);
+  }
+
+  const y = finalUtc.getUTCFullYear();
+  const m = String(finalUtc.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(finalUtc.getUTCDate()).padStart(2, '0');
+
+  return {
+    utcDate: `${y}-${m}-${d}`,
+    utcHour: finalUtc.getUTCHours(),
+  };
+}
+
 class AvailabilityService {
   /**
    * Generate all 30-minute time slots for a date range
@@ -537,33 +605,58 @@ class AvailabilityService {
 
     const membersWithData = totalMembers - membersWithoutData.length;
 
+    // Build exclusion set for data-less members (Bug 3 fix)
+    const noDataUserIds = new Set(membersWithoutData.map(m => m.user_id));
+
     // 7. Build a lookup map for overlaps: key = "date_HH:MM"
     const overlapMap = new Map();
     for (const slot of overlaps) {
       overlapMap.set(`${slot.date}_${slot.timeSlot}`, slot);
     }
 
-    // 8. Generate hourly slots (7 days x 13 hours: 10am-10pm) with poll merging
-    //    Uniform 10am-11pm range for all days. The frontend maps UTC slots to
-    //    local display using the same range.
+    // 8. Generate hourly slots (7 days x 14 hours: 10am-midnight) with poll merging
+    //    When a valid timezone is provided, convert local 10-23 to UTC hours per day.
+    //    Otherwise fall back to UTC 10-23.
+    const validTz = isValidTimezone(timezone) && timezone !== 'UTC' ? timezone : null;
+    if (timezone && timezone !== 'UTC' && !validTz) {
+      console.warn(`getGroupHeatmap: invalid timezone "${timezone}", falling back to UTC`);
+    }
+
     const gcalConflicts = [];
     const slots = [];
     for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
       const slotDate = new Date(startDate);
       slotDate.setUTCDate(slotDate.getUTCDate() + dayOffset);
-      const dateStr = this.formatDateISO(slotDate);
-      const isoDayOfWeek = this.getISODayOfWeek(slotDate);
 
-      for (let hour = 10; hour <= 22; hour++) {
-        const h00Key = `${dateStr}_${String(hour).padStart(2, '0')}:00`;
-        const h30Key = `${dateStr}_${String(hour).padStart(2, '0')}:30`;
+      for (let localHour = 10; localHour <= 23; localHour++) {
+        let dateStr, utcHour, isoDayOfWeek;
+
+        if (validTz) {
+          // Compute the local date for this dayOffset in the requester's timezone
+          const localDateStr = slotDate.toLocaleDateString('en-CA', { timeZone: validTz });
+          const converted = localToUtc(localDateStr, localHour, validTz);
+          dateStr = converted.utcDate;
+          utcHour = converted.utcHour;
+          // dayOfWeek based on the UTC date of the emitted slot
+          const utcSlotDate = new Date(dateStr + 'T00:00:00Z');
+          isoDayOfWeek = this.getISODayOfWeek(utcSlotDate);
+        } else {
+          // Fallback: use UTC hours directly
+          dateStr = this.formatDateISO(slotDate);
+          utcHour = localHour;
+          isoDayOfWeek = this.getISODayOfWeek(slotDate);
+        }
+
+        const h00Key = `${dateStr}_${String(utcHour).padStart(2, '0')}:00`;
+        const h30Key = `${dateStr}_${String(utcHour).padStart(2, '0')}:30`;
 
         const slot00 = overlapMap.get(h00Key);
         const slot30 = overlapMap.get(h30Key);
 
         // AND logic: user must be in BOTH sub-slots to count as available
-        const members00 = slot00 ? slot00.availableMembers : [];
-        const members30 = slot30 ? slot30.availableMembers : [];
+        // Filter out data-less members BEFORE intersection (Bug 3)
+        const members00 = (slot00 ? slot00.availableMembers : []).filter(m => !noDataUserIds.has(m.user_id));
+        const members30 = (slot30 ? slot30.availableMembers : []).filter(m => !noDataUserIds.has(m.user_id));
 
         // Intersect by user_id for overlap-based availability
         const members30Set = new Set(members30.map(m => m.user_id));
@@ -578,6 +671,9 @@ class AvailabilityService {
         const finalAvailable = new Map(overlapAvailable);
 
         for (const [userId, pollData] of pollResponseMap.entries()) {
+          // Skip poll users who have no data (shouldn't happen, but be safe)
+          if (noDataUserIds.has(userId)) continue;
+
           const hasBothSubSlots = pollData.slots.has(h00Key) && pollData.slots.has(h30Key);
           if (hasBothSubSlots) {
             // Poll says available -- override overlap result
@@ -592,7 +688,7 @@ class AvailabilityService {
                   user_id: userId,
                   username: gcalData.username,
                   date: dateStr,
-                  hour,
+                  hour: utcHour,
                 });
               }
             }
@@ -607,9 +703,9 @@ class AvailabilityService {
         slots.push({
           date: dateStr,
           dayOfWeek: isoDayOfWeek,
-          hour,
+          hour: utcHour,
           availableCount: availableMembers.length,
-          totalMembers,
+          totalMembers: membersWithData,
           availableMembers,
         });
       }
@@ -618,9 +714,11 @@ class AvailabilityService {
     return {
       weekStart: weekStartStr,
       weekEnd: weekEndStr,
-      totalMembers,
+      totalMembers: membersWithData,
+      totalGroupMembers: totalMembers,
       membersWithData,
       membersWithoutData,
+      membersWithoutDataCount: membersWithoutData.length,
       gcalConflicts,
       slots,
     };
