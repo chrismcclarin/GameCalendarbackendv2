@@ -632,8 +632,11 @@ class AvailabilityService {
         let dateStr, utcHour, isoDayOfWeek;
 
         if (validTz) {
-          // Compute the local date for this dayOffset in the requester's timezone
-          const localDateStr = slotDate.toLocaleDateString('en-CA', { timeZone: validTz });
+          // Compute local date by adding dayOffset to the weekStart date string.
+          // weekStart is always a Monday; local days are Mon-Sun regardless of timezone.
+          const localBase = new Date(weekStart + 'T12:00:00Z'); // noon UTC avoids day-boundary issues
+          localBase.setUTCDate(localBase.getUTCDate() + dayOffset);
+          const localDateStr = localBase.toISOString().split('T')[0]; // YYYY-MM-DD
           const converted = localToUtc(localDateStr, localHour, validTz);
           dateStr = converted.utcDate;
           utcHour = converted.utcHour;

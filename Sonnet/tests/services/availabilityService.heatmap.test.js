@@ -144,9 +144,9 @@ describe('availabilityService.getGroupHeatmap', () => {
   });
 
   // ===================================
-  // Test 3: Slots outside 10am-11pm are excluded
+  // Test 3: Hour range is 10-23 (14 hours); hour 9 excluded, hour 23 included
   // ===================================
-  it('excludes slots outside 10am-11pm range (09:00 and 23:00 excluded)', async () => {
+  it('includes hours 10-23 and excludes hour 9 (14-hour output window)', async () => {
     const overlaps = [
       // 09:00 and 09:30 -- should be excluded (before 10am)
       buildOverlapSlot('2026-03-23', '09:00', [userA], 3),
@@ -154,7 +154,7 @@ describe('availabilityService.getGroupHeatmap', () => {
       // 14:00 and 14:30 -- should be included
       buildOverlapSlot('2026-03-23', '14:00', [userA], 3),
       buildOverlapSlot('2026-03-23', '14:30', [userA], 3),
-      // 23:00 and 23:30 -- should be excluded (after 22:30)
+      // 23:00 and 23:30 -- should be included (10am-midnight range)
       buildOverlapSlot('2026-03-23', '23:00', [userA], 3),
       buildOverlapSlot('2026-03-23', '23:30', [userA], 3),
     ];
@@ -167,16 +167,17 @@ describe('availabilityService.getGroupHeatmap', () => {
     const slot09 = result.slots.find(s => s.date === '2026-03-23' && s.hour === 9);
     expect(slot09).toBeUndefined();
 
-    // No slot for hour 23
+    // Hour 23 should now exist (10am-midnight range)
     const slot23 = result.slots.find(s => s.date === '2026-03-23' && s.hour === 23);
-    expect(slot23).toBeUndefined();
+    expect(slot23).toBeDefined();
+    expect(slot23.availableCount).toBe(1);
 
     // Hour 14 should exist
     const slot14 = result.slots.find(s => s.date === '2026-03-23' && s.hour === 14);
     expect(slot14).toBeDefined();
     expect(slot14.availableCount).toBe(1);
 
-    // Hour 10 should now exist (new lower boundary)
+    // Hour 10 should exist (lower boundary)
     const slot10 = result.slots.find(s => s.date === '2026-03-23' && s.hour === 10);
     expect(slot10).toBeDefined();
   });
@@ -206,7 +207,9 @@ describe('availabilityService.getGroupHeatmap', () => {
 
     const result = await availabilityService.getGroupHeatmap('test-group-id', '2026-03-23', 'UTC');
 
-    expect(result.totalMembers).toBe(5);
+    // totalMembers now reflects only data-contributing members
+    expect(result.totalMembers).toBe(3);
+    expect(result.totalGroupMembers).toBe(5);
     expect(result.membersWithoutData).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ user_id: 'auth0|ddd', username: 'Dave' }),
@@ -214,23 +217,24 @@ describe('availabilityService.getGroupHeatmap', () => {
       ])
     );
     expect(result.membersWithoutData).toHaveLength(2);
+    expect(result.membersWithoutDataCount).toBe(2);
     expect(result.membersWithData).toBe(3);
   });
 
   // ===================================
-  // Test 5: Returns exactly 91 slots (7 days x 13 hours: 10-22)
+  // Test 5: Returns exactly 98 slots (7 days x 14 hours: 10-23)
   // ===================================
-  it('returns exactly 91 slots (7 days x 13 hours) for a full week', async () => {
+  it('returns exactly 98 slots (7 days x 14 hours) for a full week', async () => {
     mockOverlaps([]);
     mockGroupMembers([userA], { 'auth0|aaa': true });
 
     const result = await availabilityService.getGroupHeatmap('test-group-id', '2026-03-23', 'UTC');
 
-    expect(result.slots).toHaveLength(91);
+    expect(result.slots).toHaveLength(98);
 
-    // Verify all hours are 10-22
+    // Verify all hours are 10-23
     const hours = [...new Set(result.slots.map(s => s.hour))];
-    expect(hours.sort((a, b) => a - b)).toEqual([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]);
+    expect(hours.sort((a, b) => a - b)).toEqual([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]);
 
     // Verify all 7 days present
     const dates = [...new Set(result.slots.map(s => s.date))];
@@ -283,8 +287,10 @@ describe('availabilityService.getGroupHeatmap', () => {
     expect(result.weekStart).toBe('2026-03-23');
     expect(result.weekEnd).toBe('2026-03-30');
     expect(result.totalMembers).toBe(2);
+    expect(result.totalGroupMembers).toBe(2);
     expect(result.membersWithData).toBe(2);
     expect(result.membersWithoutData).toEqual([]);
+    expect(result.membersWithoutDataCount).toBe(0);
     expect(Array.isArray(result.slots)).toBe(true);
     expect(Array.isArray(result.gcalConflicts)).toBe(true);
     expect(result.gcalConflicts).toEqual([]);
@@ -444,5 +450,154 @@ describe('availabilityService.getGroupHeatmap', () => {
         })
       ])
     );
+  });
+
+  // ===================================
+  // Test 13: Timezone shifting -- America/New_York shifts output hours to UTC
+  // ===================================
+  it('shifts output hours to UTC equivalents when timezone is provided', async () => {
+    // Build overlap data covering UTC hours 14-03 (local 10-23 EDT, UTC-4)
+    const overlapSlots = [];
+    // Local 10am EDT = UTC 14:00. Provide overlap at UTC 14:00 and 14:30 with userA available.
+    overlapSlots.push(buildOverlapSlot('2026-04-20', '14:00', [userA], 2));
+    overlapSlots.push(buildOverlapSlot('2026-04-20', '14:30', [userA], 2));
+    // Local 11pm EDT = UTC 03:00 next day. Provide overlap at UTC 03:00 and 03:30 on 2026-04-21.
+    overlapSlots.push(buildOverlapSlot('2026-04-21', '03:00', [userA], 2));
+    overlapSlots.push(buildOverlapSlot('2026-04-21', '03:30', [userA], 2));
+    mockOverlaps(overlapSlots);
+    mockGroupMembers([userA, userB], { 'auth0|aaa': true, 'auth0|bbb': true });
+
+    const result = await availabilityService.getGroupHeatmap('test-group-id', '2026-04-20', 'America/New_York');
+
+    // First local hour (10am EDT) should map to UTC 14
+    const firstSlot = result.slots[0];
+    expect(firstSlot.hour).toBe(14);
+    expect(firstSlot.date).toBe('2026-04-20');
+    expect(firstSlot.availableCount).toBe(1);
+
+    // Last local hour (11pm EDT) should map to UTC 03 next day
+    const lastLocalHourSlots = result.slots.filter(s => s.date === '2026-04-21' && s.hour === 3);
+    expect(lastLocalHourSlots.length).toBeGreaterThan(0);
+    expect(lastLocalHourSlots[0].availableCount).toBe(1);
+
+    // Should still have 98 total slots (7 days x 14 hours)
+    expect(result.slots).toHaveLength(98);
+  });
+
+  // ===================================
+  // Test 14: Timezone fallback -- invalid timezone falls back to UTC 10-23
+  // ===================================
+  it('falls back to UTC hours 10-23 when timezone is invalid', async () => {
+    mockOverlaps([]);
+    mockGroupMembers([userA], { 'auth0|aaa': true });
+
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const result = await availabilityService.getGroupHeatmap('test-group-id', '2026-03-23', 'Invalid/Zone');
+    warnSpy.mockRestore();
+
+    // Should still produce 98 slots with UTC hours 10-23
+    expect(result.slots).toHaveLength(98);
+    const hours = [...new Set(result.slots.map(s => s.hour))];
+    expect(hours.sort((a, b) => a - b)).toEqual([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]);
+  });
+
+  // ===================================
+  // Test 15: Timezone fallback -- undefined timezone falls back to UTC 10-23
+  // ===================================
+  it('falls back to UTC hours 10-23 when timezone is undefined', async () => {
+    mockOverlaps([]);
+    mockGroupMembers([userA], { 'auth0|aaa': true });
+
+    const result = await availabilityService.getGroupHeatmap('test-group-id', '2026-03-23');
+
+    expect(result.slots).toHaveLength(98);
+    const hours = [...new Set(result.slots.map(s => s.hour))];
+    expect(hours.sort((a, b) => a - b)).toEqual([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]);
+  });
+
+  // ===================================
+  // Test 16: Data-less member exclusion from slot availableMembers
+  // ===================================
+  it('excludes data-less members from slot availableMembers and adjusts totalMembers', async () => {
+    const userD = { user_id: 'auth0|ddd', username: 'Dave', email: 'dave@test.com' };
+    // Overlap data has all 3 users available (data-less member inflated by calculateGroupOverlaps)
+    const overlaps = [
+      buildOverlapSlot('2026-03-23', '14:00', [userA, userB, userD], 3),
+      buildOverlapSlot('2026-03-23', '14:30', [userA, userB, userD], 3),
+    ];
+    mockOverlaps(overlaps);
+    // userA has recurring, userB has gcal, userD has nothing
+    mockGroupMembers(
+      [
+        { ...userA, google_calendar_enabled: false },
+        { ...userB, google_calendar_enabled: true, google_calendar_token: 'token-b' },
+        { ...userD, google_calendar_enabled: false },
+      ],
+      { 'auth0|aaa': true, 'auth0|bbb': false, 'auth0|ddd': false }
+    );
+
+    const result = await availabilityService.getGroupHeatmap('test-group-id', '2026-03-23', 'UTC');
+
+    // totalMembers = 2 (only data-contributing), totalGroupMembers = 3
+    expect(result.totalMembers).toBe(2);
+    expect(result.totalGroupMembers).toBe(3);
+    expect(result.membersWithoutDataCount).toBe(1);
+
+    // Dave should NOT appear in any slot's availableMembers
+    const slot14 = result.slots.find(s => s.date === '2026-03-23' && s.hour === 14);
+    expect(slot14).toBeDefined();
+    expect(slot14.availableCount).toBe(2);
+    expect(slot14.availableMembers.map(m => m.user_id)).not.toContain('auth0|ddd');
+    expect(slot14.totalMembers).toBe(2);
+  });
+
+  // ===================================
+  // Test 17: Empty heatmap (0 members with data)
+  // ===================================
+  it('returns 98 slots with 0 availability when all members have no data', async () => {
+    mockOverlaps([]);
+    // All members have no data sources
+    mockGroupMembers(
+      [
+        { ...userA, google_calendar_enabled: false },
+        { ...userB, google_calendar_enabled: false },
+      ],
+      { 'auth0|aaa': false, 'auth0|bbb': false }
+    );
+
+    const result = await availabilityService.getGroupHeatmap('test-group-id', '2026-03-23', 'UTC');
+
+    expect(result.totalMembers).toBe(0);
+    expect(result.totalGroupMembers).toBe(2);
+    expect(result.membersWithoutDataCount).toBe(2);
+    expect(result.slots).toHaveLength(98);
+    // Every slot should have 0 available
+    result.slots.forEach(s => {
+      expect(s.availableCount).toBe(0);
+      expect(s.totalMembers).toBe(0);
+    });
+  });
+
+  // ===================================
+  // Test 18: Day boundary wrapping -- local late evening maps to next-day UTC
+  // ===================================
+  it('wraps to next-day UTC date when local evening hour crosses midnight UTC', async () => {
+    // America/Los_Angeles is UTC-7 in April (PDT)
+    // Local 23:00 PDT = UTC 06:00 next day
+    const overlaps = [
+      buildOverlapSlot('2026-04-21', '06:00', [userA], 2),
+      buildOverlapSlot('2026-04-21', '06:30', [userA], 2),
+    ];
+    mockOverlaps(overlaps);
+    mockGroupMembers([userA, userB], { 'auth0|aaa': true, 'auth0|bbb': true });
+
+    const result = await availabilityService.getGroupHeatmap('test-group-id', '2026-04-20', 'America/Los_Angeles');
+
+    // Find the slot emitted for local 23:00 PDT on Monday (2026-04-20 local)
+    // This should have UTC date 2026-04-21 and UTC hour 6
+    const wrappedSlot = result.slots.find(s => s.date === '2026-04-21' && s.hour === 6);
+    expect(wrappedSlot).toBeDefined();
+    expect(wrappedSlot.availableCount).toBe(1);
+    expect(wrappedSlot.availableMembers[0].user_id).toBe('auth0|aaa');
   });
 });
