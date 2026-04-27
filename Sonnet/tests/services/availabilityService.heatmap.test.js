@@ -600,4 +600,22 @@ describe('availabilityService.getGroupHeatmap', () => {
     expect(wrappedSlot.availableCount).toBe(1);
     expect(wrappedSlot.availableMembers[0].user_id).toBe('auth0|aaa');
   });
+
+  // ===================================
+  // Test 19: Overlap query window extends ±1 day to cover timezone shifts
+  // Regression: Sun 17-23 PDT lands in next-Mon 00-06 UTC. The overlap query
+  // must cover that range, otherwise late Sunday slots show 0 availability.
+  // ===================================
+  it('queries calculateGroupOverlaps with window extended ±1 day for timezone coverage', async () => {
+    const spy = jest.spyOn(availabilityService, 'calculateGroupOverlaps').mockResolvedValue([]);
+    mockGroupMembers([userA, userB], { 'auth0|aaa': true, 'auth0|bbb': true });
+
+    await availabilityService.getGroupHeatmap('test-group-id', '2026-04-20', 'America/Los_Angeles');
+
+    expect(spy).toHaveBeenCalled();
+    const [, startArg, endArg] = spy.mock.calls[0];
+    // weekStart is 2026-04-20 (Mon). overlap window should be [04-19, 04-28).
+    expect(startArg.toISOString().startsWith('2026-04-19')).toBe(true);
+    expect(endArg.toISOString().startsWith('2026-04-28')).toBe(true);
+  });
 });

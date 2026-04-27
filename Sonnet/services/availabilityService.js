@@ -503,8 +503,16 @@ class AvailabilityService {
     const weekStartStr = this.formatDateISO(startDate);
     const weekEndStr = this.formatDateISO(endDate);
 
+    // Extend the underlying overlap query window by ±1 day so local Mon–Sun
+    // hours 10–23 land inside the queried UTC range for any timezone offset.
+    // (e.g. PDT Sun 17:00–23:00 = next Mon 00:00–06:00 UTC, outside [Mon, nextMon).)
+    const overlapStart = new Date(startDate);
+    overlapStart.setUTCDate(overlapStart.getUTCDate() - 1);
+    const overlapEnd = new Date(endDate);
+    overlapEnd.setUTCDate(overlapEnd.getUTCDate() + 1);
+
     // 3. Get raw 30-min overlaps from existing method
-    const overlaps = await this.calculateGroupOverlaps(groupId, startDate, endDate, timezone);
+    const overlaps = await this.calculateGroupOverlaps(groupId, overlapStart, overlapEnd, timezone);
 
     // 4. Query group members to determine who has/lacks availability data
     const { Group, UserGroup, AvailabilityPrompt, AvailabilityResponse } = require('../models');
@@ -572,7 +580,7 @@ class AvailabilityService {
       if (hasGcal && pollResponseMap.has(member.user_id)) {
         try {
           const busyTimes = await googleCalendarService.getBusyTimesForDateRange(
-            member, startDate, endDate, timezone
+            member, overlapStart, overlapEnd, timezone
           );
           const busySet = new Set();
           for (const busy of busyTimes) {
