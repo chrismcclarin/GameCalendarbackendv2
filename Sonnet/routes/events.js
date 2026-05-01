@@ -7,6 +7,7 @@ const router = express.Router();
 const auth0Service = require('../services/auth0Service');
 const googleCalendarService = require('../services/googleCalendarService');
 const emailService = require('../services/emailService');
+const icsService = require('../services/icsService');
 const notificationService = require('../services/notificationService');
 const { generateRsvpUrl } = require('./rsvp');
 
@@ -924,6 +925,79 @@ router.post('/join-game-by-token', async (req, res) => {
       user_id: dbUser.id,
       is_guest: true,
     });
+
+    // Fire-and-forget confirmation email (do not block on send) — MAIL-03
+    // Only reached on a brand-new participation; the existing already_joined
+    // early-return above means returning users do not get a duplicate receipt.
+    (async () => {
+      try {
+        // Refetch the user with all the fields we need for the email render
+        const fullUser = await User.findOne({ where: { user_id: userId } });
+        if (!fullUser?.email || fullUser.email.includes('@auth0.local') || fullUser.email.includes('@auth0')) {
+          return; // No real email to send to
+        }
+        if (fullUser.email_notifications_enabled === false) {
+          return; // Master email toggle off
+        }
+
+        const game = event.game_id
+          ? await Game.findByPk(event.game_id, { attributes: ['name'] })
+          : null;
+        const group = event.Group || await Group.findByPk(event.group_id, { attributes: ['id', 'name'] });
+
+        // Resolve host: Event model has no `created_by` field (verified) so we
+        // fall back to the group name. If/when MAIL-04 or another phase adds a
+        // creator/host attribution to events, swap this to use it.
+        const hostName = group?.name || 'your group';
+
+        const frontendUrl = process.env.FRONTEND_URL || process.env.AUTH0_BASE_URL || 'http://localhost:3000';
+        const eventUrl = `${frontendUrl}/gameDetail?event_id=${event.id}&group_id=${event.group_id}`;
+        const recipientTz = fullUser.timezone || 'UTC';
+        const startUtc = new Date(event.start_date);
+        const durationMinutes = event.duration_minutes || 120;
+        // Event model has no `location` field today; pass null so ICS/template
+        // gracefully omit it. Future location field would be transparent.
+        const location = event.location || null;
+        const gameName = game?.name || 'Game Night';
+        const groupName = group?.name || 'your group';
+
+        const icsString = icsService.buildEventIcs({
+          eventId: event.id,
+          gameName,
+          groupName,
+          startUtc,
+          durationMinutes,
+          location,
+          description: `Game night with ${groupName} on Nextgamenight. View: ${eventUrl}`,
+          hostName,
+          organizerEmail: 'schedule@nextgamenight.app',
+        });
+        const googleCalendarUrl = icsService.buildGoogleCalendarUrl({
+          gameName,
+          groupName,
+          startUtc,
+          durationMinutes,
+          location: location || '',
+          description: `Game night with ${groupName} on Nextgamenight.`,
+        });
+
+        await emailService.sendGameJoinConfirmation(fullUser.email, {
+          gameName,
+          groupName,
+          eventDate: event.start_date,
+          durationMinutes,
+          location,
+          hostName,
+          recipientName: fullUser.username,
+          eventUrl,
+          googleCalendarUrl,
+          timezone: recipientTz,
+          icsAttachmentBase64: Buffer.from(icsString, 'utf-8').toString('base64'),
+        });
+      } catch (err) {
+        console.error('[QR confirmation] non-fatal email send error:', err.message);
+      }
+    })();
 
     res.json({ success: true, event_id: event.id, group_id: event.group_id });
   } catch (error) {
