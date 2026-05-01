@@ -26,6 +26,7 @@ const EventBring = require('./EventBring');
 const EventBallotOption = require('./EventBallotOption');
 const EventBallotVote = require('./EventBallotVote');
 const SentNotification = require('./SentNotification');
+const SchedulerRun = require('./SchedulerRun');
 const sequelize = require('../config/database');
 
 
@@ -216,5 +217,6 @@ module.exports = {
   EventBallotOption,
   EventBallotVote,
   SentNotification,
+  SchedulerRun,
   sequelize,
 };
