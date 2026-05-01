@@ -83,6 +83,11 @@ const User = sequelize.define('User', {
     defaultValue: null,
   },
   // Shape: { [type]: { email: bool, sms: bool } } -- null = use defaults
+  // null = use defaults (email on, sms off). Populated via PATCH
+  // /users/:id/notification-preferences. Phase 61: do not backfill or
+  // force-flip; preserve user choice exactly. New users default to
+  // reminder.email=true via the null-prefs resolver in
+  // services/notificationService.js (getPreference).
   notification_preferences: {
     type: DataTypes.JSONB,
     allowNull: true,

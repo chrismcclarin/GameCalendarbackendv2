@@ -5,6 +5,7 @@ const Redis = require('ioredis');
 const { AvailabilityPrompt, AvailabilityResponse, UserGroup, User, Group, GroupPromptSettings } = require('../models');
 const { Op } = require('sequelize');
 const emailService = require('../services/emailService');
+const notificationService = require('../services/notificationService');
 const magicTokenService = require('../services/magicTokenService');
 
 function buildReminderEmailHtml({ recipientName, groupName, weekDescription, responseDeadline, formUrl }) {
@@ -75,7 +76,10 @@ const reminderWorker = new Worker('reminders', async (job) => {
   });
   const expiryHours = settings?.default_token_expiry_hours || 168;
 
-  // Get active group members only (exclude pending/declined invites)
+  // Get active group members only (exclude pending/declined invites).
+  // DB-level filter narrows the load to users with email globally enabled;
+  // notificationService.getPreference below enforces the final per-type
+  // routing decision (defense-in-depth -- master toggle + per-type toggle).
   const memberships = await UserGroup.findAll({
     where: { group_id: prompt.group_id, status: 'active' },
     include: [{
@@ -84,6 +88,18 @@ const reminderWorker = new Worker('reminders', async (job) => {
       required: true
     }]
   });
+
+  // Phase 61 / MAIL-02: honor the per-user `reminder.email` preference set in
+  // the profile UI. If a user toggled "Event Reminders" -> email OFF, we skip
+  // them here. New users (notification_preferences=null) fall through to the
+  // default "true" branch in getPreference, so they're included by default.
+  const eligibleMemberships = memberships.filter(m =>
+    notificationService.getPreference(m.User, 'reminder', 'email')
+  );
+  const optedOutCount = memberships.length - eligibleMemberships.length;
+  if (optedOutCount > 0) {
+    console.log(`[ReminderWorker] Filtered out ${optedOutCount} users who disabled reminder.email`);
+  }
 
   // Find who has already responded (submitted_at is not null)
   const responses = await AvailabilityResponse.findAll({
@@ -97,7 +113,7 @@ const reminderWorker = new Worker('reminders', async (job) => {
   let remindersSent = 0;
   let skipped = 0;
 
-  for (const membership of memberships) {
+  for (const membership of eligibleMemberships) {
     const user = membership.User;
     const userId = membership.user_id;
 
