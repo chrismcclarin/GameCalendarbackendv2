@@ -261,6 +261,10 @@ router.get('/group/:group_id', async (req, res) => {
       where: { group_id: req.params.group_id },
       include: [
         { model: Game, attributes: ['name', 'image_url', 'theme'] },
+        {
+          model: Group,
+          attributes: ['id', 'name', 'profile_picture_url', 'background_color', 'background_image_url']
+        },
         { model: User, as: 'Winner', attributes: ['id', 'username', 'user_id'] },
         { model: User, as: 'PickedBy', attributes: ['id', 'username'] },
         {
@@ -270,7 +274,7 @@ router.get('/group/:group_id', async (req, res) => {
       ],
       order: [['start_date', 'DESC']]
     });
-    
+
     // Format all events with custom participants
     let formattedEvents = events.map(event => formatEventWithCustomParticipants(event));
 
