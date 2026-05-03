@@ -619,3 +619,210 @@ describe('availabilityService.getGroupHeatmap', () => {
     expect(endArg.toISOString().startsWith('2026-04-28')).toBe(true);
   });
 });
+
+// ============================================================================
+// HEAT-02 reproduction: specific_override survival in heatmap
+//
+// The existing 19 tests above all MOCK calculateGroupOverlaps with
+// `mockOverlaps()`, which means they never exercise the real
+// matchesSpecificOverride / calculateUserAvailability path. A specific override
+// could fall off any boundary in that path and the existing suite would not
+// notice.
+//
+// These tests do NOT mock calculateGroupOverlaps. They mock UserAvailability
+// .findAll to return a single specific_override row (shaped exactly as the
+// real POST /availability/user/:id/override route writes it) and then assert
+// that the heatmap output contains the user as available for the slot the
+// override covers, in the user's local timezone.
+// ============================================================================
+describe('availabilityService.getGroupHeatmap -- specific_override survival (HEAT-02)', () => {
+  // userT = "user under test" -- always Tuesday, never UTC, never gcal
+  const userT = { user_id: 'auth0|override-user', username: 'OverrideUser', email: 'ot@test.com' };
+  const denverTz = 'America/Denver';
+  const weekMonday = '2026-04-20';      // Monday
+  const overrideTuesday = '2026-04-21'; // Tuesday in that week
+
+  // Helper: configure mocks so the REAL aggregation path runs end-to-end.
+  // - Group has exactly userT, no gcal
+  // - UserAvailability.findAll returns [override] for userT, [] for anyone else
+  // - No active prompts
+  function setupOverrideOnlyUser({ overrides = [], extraMembers = [], extraAvailabilityByUser = {} } = {}) {
+    const allMembers = [
+      {
+        ...userT,
+        id: userT.user_id,
+        google_calendar_enabled: false,
+        google_calendar_token: null,
+        google_calendar_refresh_token: null,
+        timezone: denverTz,
+      },
+      ...extraMembers,
+    ];
+
+    Group.findByPk.mockResolvedValue({
+      id: 'test-group-id',
+      Users: allMembers,
+    });
+
+    UserAvailability.findAll.mockImplementation(async ({ where }) => {
+      if (where.user_id === userT.user_id) return overrides;
+      if (extraAvailabilityByUser[where.user_id]) return extraAvailabilityByUser[where.user_id];
+      return [];
+    });
+
+    AvailabilityPrompt.findAll.mockResolvedValue([]);
+    AvailabilityResponse.findAll.mockResolvedValue([]);
+  }
+
+  // Build an override row shaped exactly like routes/availability.js POST /override writes
+  function buildOverrideRow(date, startTime, endTime, isAvailable = true) {
+    return {
+      id: 'override-' + date + '-' + startTime,
+      user_id: userT.user_id,
+      type: 'specific_override',
+      pattern_data: { date, startTime, endTime, isAvailable },
+      start_date: date,           // Sequelize DATEONLY -> string in queries
+      end_date: date,
+      is_available: isAvailable,
+      timezone: 'UTC',            // hardcoded by current route
+    };
+  }
+
+  // Build a recurring pattern row (used to flip defaultAvailability to false)
+  function buildRecurringRow(dayOfWeek, startTime, endTime, startDate = '2026-01-01') {
+    return {
+      id: 'recurring-' + dayOfWeek + '-' + startTime,
+      user_id: userT.user_id,
+      type: 'recurring_pattern',
+      pattern_data: { dayOfWeek, startTime, endTime, timezone: denverTz },
+      start_date: startDate,
+      end_date: null,
+      is_available: null,
+      timezone: denverTz,
+    };
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // Critical: prior describe block uses jest.spyOn(...calculateGroupOverlaps).mockResolvedValue([])
+    // which persists across describes (clearAllMocks resets calls but keeps the spy installed).
+    // Restore so we exercise the REAL aggregation path for these tests.
+    jest.restoreAllMocks();
+    AvailabilityPrompt.findAll.mockResolvedValue([]);
+    AvailabilityResponse.findAll.mockResolvedValue([]);
+  });
+
+  // -------------------------------------------------------------------------
+  // Variant 1 (headline test): override-only user, mid-day override.
+  // Expectation: the heatmap slot for the user's local 14:00 on Tuesday
+  // shows the user as available.
+  //
+  // Why this might pass even with the bug: when a user has NO recurring
+  // patterns, calculateUserAvailability defaults every slot to available.
+  // So the override could be silently mis-targeting a different UTC slot
+  // and this test would still pass. If it does pass, variant 2 below
+  // (recurring + override on a non-recurring day) is the real probe.
+  // -------------------------------------------------------------------------
+  it('override-only user: 14:00-16:00 Tuesday override shows user available at local 14:00', async () => {
+    setupOverrideOnlyUser({
+      overrides: [buildOverrideRow(overrideTuesday, '14:00', '16:00', true)],
+    });
+
+    const result = await availabilityService.getGroupHeatmap('test-group-id', weekMonday, denverTz);
+
+    // Find the Tuesday 14:00 local slot. With TZ shift, local 14:00 MDT = UTC 20:00.
+    // The slot is keyed by its UTC date+hour but represents the user's local 14:00.
+    const tuesdaySlots = result.slots.filter(s => {
+      // After localToUtc shift: local Tue 14:00 MDT (UTC-6) -> UTC 2026-04-21 20:00
+      return s.date === overrideTuesday && s.hour === 20;
+    });
+
+    expect(tuesdaySlots.length).toBe(1);
+    const slot = tuesdaySlots[0];
+    expect(slot.availableMembers.map(m => m.user_id)).toContain(userT.user_id);
+    expect(slot.availableCount).toBeGreaterThanOrEqual(1);
+    expect(slot.totalMembers).toBeGreaterThanOrEqual(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // Variant 2 (the real probe): user has a recurring pattern that does NOT
+  // cover Tuesday 14:00, plus an override that DOES cover Tuesday 14:00.
+  //
+  // With recurring patterns present, defaultAvailability flips to FALSE.
+  // Now the override MUST positively mark the right slots -- there is no
+  // default-available fallback. If matchesSpecificOverride compares the
+  // override's local startTime against UTC slot.startTime, it will mark
+  // UTC 14:00 (= local 08:00 MDT) instead of local 14:00, and the local
+  // 14:00 slot will show the user as UNAVAILABLE.
+  //
+  // Expected (correct) behavior: user IS available at local 14:00 Tue.
+  // -------------------------------------------------------------------------
+  it('recurring + override: override on a non-recurring day still appears in heatmap', async () => {
+    setupOverrideOnlyUser({
+      overrides: [
+        // Recurring: Mondays only, 18:00-20:00 local. dayOfWeek 1 = Monday.
+        buildRecurringRow(1, '18:00', '20:00'),
+        // Override: Tuesday 14:00-16:00 local (a day the recurring pattern does NOT cover).
+        buildOverrideRow(overrideTuesday, '14:00', '16:00', true),
+      ],
+    });
+
+    const result = await availabilityService.getGroupHeatmap('test-group-id', weekMonday, denverTz);
+
+    // Tue local 14:00 MDT = UTC 20:00 on 2026-04-21
+    const slot = result.slots.find(s => s.date === overrideTuesday && s.hour === 20);
+    expect(slot).toBeDefined();
+    expect(slot.availableMembers.map(m => m.user_id)).toContain(userT.user_id);
+    expect(slot.availableCount).toBeGreaterThanOrEqual(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // Variant 3: cross-TZ correctness probe. The override is at user's local
+  // 14:00 MDT (UTC 20:00). The slot at UTC 14:00 (= local 08:00 MDT) should
+  // NOT show the user as available -- they specifically did not flag that hour.
+  //
+  // If the matcher compares override.pattern_data.startTime ("14:00") against
+  // slot.startTime ("14:00" UTC), the wrong slot lights up. This test catches
+  // that misalignment.
+  // -------------------------------------------------------------------------
+  it('recurring + override: heatmap does NOT show user available at the WRONG (UTC-equivalent) hour', async () => {
+    setupOverrideOnlyUser({
+      overrides: [
+        // Recurring: Mondays only, 18:00-20:00 local
+        buildRecurringRow(1, '18:00', '20:00'),
+        // Override: Tuesday 14:00-16:00 local
+        buildOverrideRow(overrideTuesday, '14:00', '16:00', true),
+      ],
+    });
+
+    const result = await availabilityService.getGroupHeatmap('test-group-id', weekMonday, denverTz);
+
+    // The local 08:00 hour is OUTSIDE the heatmap's 10-23 window, so won't appear at all.
+    // Probe the local 10:00 instead -- override does NOT cover it, recurring does NOT cover it.
+    // local Tue 10:00 MDT = UTC 16:00 on 2026-04-21.
+    const tenAmSlot = result.slots.find(s => s.date === overrideTuesday && s.hour === 16);
+    expect(tenAmSlot).toBeDefined();
+    expect(tenAmSlot.availableMembers.map(m => m.user_id)).not.toContain(userT.user_id);
+  });
+
+  // -------------------------------------------------------------------------
+  // Variant 4: late-day boundary probe. Override at local 22:00-23:00
+  // (after the 60.1 14-hour window's upper edge in some TZs). Confirms the
+  // fix doesn't regress at the same edge 60.1 introduced.
+  // -------------------------------------------------------------------------
+  it('override at local 22:00-23:00 Tuesday appears in heatmap (late-day edge)', async () => {
+    setupOverrideOnlyUser({
+      overrides: [
+        buildRecurringRow(1, '18:00', '20:00'), // forces defaultAvailability=false
+        buildOverrideRow(overrideTuesday, '22:00', '23:00', true),
+      ],
+    });
+
+    const result = await availabilityService.getGroupHeatmap('test-group-id', weekMonday, denverTz);
+
+    // Tue local 22:00 MDT = UTC 04:00 on 2026-04-22 (next day UTC)
+    const slot = result.slots.find(s => s.date === '2026-04-22' && s.hour === 4);
+    expect(slot).toBeDefined();
+    expect(slot.availableMembers.map(m => m.user_id)).toContain(userT.user_id);
+  });
+});
