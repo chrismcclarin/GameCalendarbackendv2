@@ -90,10 +90,16 @@ class AvailabilityService {
     const maxIterations = maxDays * 48; // 48 slots per day (30-minute intervals)
     let iterationCount = 0;
     
-    // Start from beginning of start date
+    // Start from beginning of start date (UTC). Using setUTCHours keeps slot
+    // keys consistent regardless of the server's local timezone — production
+    // (UTC server) and dev (e.g. PDT) produce the same output. Previously
+    // setHours(0,0,0,0) used LOCAL time while dateStr/timeStr were derived
+    // inconsistently (dateStr from toISOString()=UTC, timeStr from
+    // toTimeString()=local), producing hybrid keys that broke matching on
+    // non-UTC servers. See HEAT-02 expansion 3 in 63-02 SUMMARY.
     const current = new Date(start);
-    current.setHours(0, 0, 0, 0);
-    
+    current.setUTCHours(0, 0, 0, 0);
+
     // Generate slots for each day until end date
     while (current <= end) {
       // Safety check to prevent infinite loops
@@ -101,18 +107,19 @@ class AvailabilityService {
         console.error('Safety limit reached in generateTimeSlots. Stopping to prevent infinite loop.');
         throw new Error('Date range too large or invalid. Maximum processing limit reached.');
       }
-      
-      // Generate 30-minute slots for this day (00:00 to 23:30)
+
+      // Generate 30-minute slots for this day (00:00 to 23:30 UTC)
       for (let hour = 0; hour < 24; hour++) {
         for (let minute = 0; minute < 60; minute += 30) {
           const slotTime = new Date(current);
-          slotTime.setHours(hour, minute, 0, 0);
-          
+          slotTime.setUTCHours(hour, minute, 0, 0);
+
           // Only include slots within the date range
           if (slotTime >= start && slotTime < end) {
-            const dateStr = slotTime.toISOString().split('T')[0];
-            const timeStr = slotTime.toTimeString().slice(0, 5); // HH:MM
-            
+            const isoStr = slotTime.toISOString();
+            const dateStr = isoStr.split('T')[0];
+            const timeStr = isoStr.slice(11, 16); // HH:MM in UTC
+
             slots.push({
               date: dateStr,
               startTime: timeStr,
@@ -122,14 +129,14 @@ class AvailabilityService {
           }
         }
       }
-      
-      // Move to next day
-      const previousDate = current.getDate();
-      current.setDate(current.getDate() + 1);
-      current.setHours(0, 0, 0, 0);
-      
+
+      // Move to next day (UTC)
+      const previousDate = current.getUTCDate();
+      current.setUTCDate(current.getUTCDate() + 1);
+      current.setUTCHours(0, 0, 0, 0);
+
       // Safety check: ensure date actually advanced
-      if (current.getDate() === previousDate) {
+      if (current.getUTCDate() === previousDate) {
         console.error('Date did not advance in generateTimeSlots. Stopping to prevent infinite loop.');
         throw new Error('Invalid date progression detected. Stopping to prevent infinite loop.');
       }

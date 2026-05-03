@@ -877,3 +877,74 @@ describe('availabilityService.getGroupHeatmap -- specific_override survival (HEA
     expect(wednesdayMidday.availableMembers.map(m => m.user_id)).not.toContain(userT.user_id);
   });
 });
+
+// ============================================================================
+// HEAT-02 expansion 3: dev-TZ bug in generateTimeSlots
+//
+// In production the backend runs on a UTC server, so setHours == setUTCHours
+// and the slot keys are pure UTC. In dev (e.g. macOS PDT), setHours uses LOCAL
+// time but the dateStr is derived from toISOString() (UTC). The result is a
+// hybrid key: dateStr in UTC, timeStr in local. Downstream lookups (matcher
+// + heatmap aggregator) all assume pure-UTC keys, so overrides silently miss.
+//
+// These tests assert the slot-key INVARIANT: each emitted slot must round-trip
+// to a single UTC moment. The invariant is process-TZ-agnostic, so the test
+// catches the bug whether jest runs under UTC or PDT.
+// ============================================================================
+describe('availabilityService.generateTimeSlots -- UTC-consistent slot keys (dev-TZ regression)', () => {
+  // KEY INVARIANT: a slot's (date, startTime) key must describe the same UTC
+  // moment as its `timestamp` field. The bug: setHours uses LOCAL time but
+  // dateStr is derived from toISOString() (UTC), producing hybrid keys that
+  // disagree with the slot's actual UTC moment. Downstream code (matcher,
+  // heatmap aggregator) treats keys as pure UTC and silently misses slots.
+  //
+  // This test FAILS on a non-UTC server (the bug's manifestation) and is
+  // a no-op on a UTC server (the production behavior).
+  it('slot (date, startTime) key describes the same UTC moment as slot.timestamp', () => {
+    const start = new Date('2026-05-01T00:00:00Z');
+    const end = new Date('2026-05-02T00:00:00Z');
+
+    const slots = availabilityService.generateTimeSlots(start, end, 'UTC');
+
+    expect(slots.length).toBe(48);
+
+    for (const slot of slots) {
+      const keyAsUtc = new Date(`${slot.date}T${slot.startTime}:00Z`).getTime();
+      expect(keyAsUtc).toBe(slot.timestamp);
+    }
+  });
+
+  // Sanity check: under any process TZ, the slots covering UTC May 1 must
+  // include the UTC hours [00:00 .. 23:30] exactly once. Hybrid keys produce
+  // keys like (2026-05-01, 17:00) for UTC midnight on PDT, which causes the
+  // expected UTC keys to be MISSING from the output set.
+  it('every UTC half-hour on the requested day appears as a slot key exactly once', () => {
+    const start = new Date('2026-05-01T00:00:00Z');
+    const end = new Date('2026-05-02T00:00:00Z');
+    const slots = availabilityService.generateTimeSlots(start, end, 'UTC');
+
+    const keys = new Set(slots.map(s => `${s.date}_${s.startTime}`));
+    expect(keys.size).toBe(slots.length); // no duplicates
+
+    for (let h = 0; h < 24; h++) {
+      for (const m of [0, 30]) {
+        const key = `2026-05-01_${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+        expect(keys.has(key)).toBe(true);
+      }
+    }
+  });
+
+  // Round-trip + monotonicity: timestamps step by 30min. A passive sanity
+  // check that the loop math itself is sound. (Not the bug-catcher — the
+  // first test is. This is a guardrail against future regressions.)
+  it('emits slots in monotonically increasing 30-min steps across the range', () => {
+    const start = new Date('2026-05-01T00:00:00Z');
+    const end = new Date('2026-05-03T00:00:00Z'); // 2 days = 96 slots
+    const slots = availabilityService.generateTimeSlots(start, end, 'UTC');
+
+    expect(slots.length).toBe(96);
+    for (let i = 1; i < slots.length; i++) {
+      expect(slots[i].timestamp - slots[i - 1].timestamp).toBe(30 * 60 * 1000);
+    }
+  });
+});
