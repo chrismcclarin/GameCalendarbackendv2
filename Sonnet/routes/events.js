@@ -920,6 +920,30 @@ router.post('/join-game-by-token', async (req, res) => {
       return res.json({ already_joined: true, event_id: event.id });
     }
 
+    // EVT-08: detect re-join after admin removal. If this user has a prior
+    // `remove_participant` audit-log row for this event, suppress the welcome
+    // email — sending "Welcome to [event]!" right after an admin removed them
+    // is the wrong tone (silent welcome-back per Phase 65 plan 01).
+    // The remove-participant handler embeds the removed User.id in
+    // event_snapshot.removed_user_id; use Op.contains for JSONB equality.
+    let isReJoinAfterRemoval = false;
+    try {
+      const priorRemoval = await EventAuditLog.findOne({
+        where: {
+          event_id: event.id,
+          action: 'remove_participant',
+          event_snapshot: { removed_user_id: dbUser.id },
+        },
+      });
+      if (priorRemoval) {
+        isReJoinAfterRemoval = true;
+      }
+    } catch (auditLookupErr) {
+      // Non-fatal — if the lookup fails, default to the old behavior (email
+      // fires). A failed lookup should not block the join itself.
+      console.error('[join-game-by-token] EventAuditLog lookup failed (non-fatal):', auditLookupErr.message);
+    }
+
     // Create guest participation
     await EventParticipation.create({
       event_id: event.id,
@@ -930,6 +954,12 @@ router.post('/join-game-by-token', async (req, res) => {
     // Fire-and-forget confirmation email (do not block on send) — MAIL-03
     // Only reached on a brand-new participation; the existing already_joined
     // early-return above means returning users do not get a duplicate receipt.
+    // EVT-08: skipped entirely on re-join after a prior admin removal —
+    // silent welcome-back, see Phase 65 plan 01.
+    if (isReJoinAfterRemoval) {
+      return res.json({ success: true, event_id: event.id, group_id: event.group_id });
+    }
+
     (async () => {
       try {
         // Refetch the user with all the fields we need for the email render
@@ -1003,6 +1033,85 @@ router.post('/join-game-by-token', async (req, res) => {
     res.json({ success: true, event_id: event.id, group_id: event.group_id });
   } catch (error) {
     console.error('Error joining game by token:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Remove a single participant from an event (EVT-08, Phase 65 plan 01).
+// Owner/admin only. Hard-destroys the EventParticipation row + writes an
+// EventAuditLog entry with action='remove_participant' so a later QR re-join
+// suppresses the welcome email (see /join-game-by-token above).
+//
+// :user_id is the EventParticipation.user_id (UUID = User.id), NOT Auth0
+// string. Hard-destroy chosen over soft-delete because the unique index on
+// (event_id, user_id) would block re-join, and EventAuditLog already provides
+// the audit trail.
+router.delete('/:event_id/participations/:user_id', validateUUID('event_id'), validateUUID('user_id'), async (req, res) => {
+  try {
+    const userId = req.user?.user_id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { event_id, user_id: participationUserId } = req.params;
+
+    const event = await Event.findByPk(event_id);
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    // Permission gate: owner/admin only (mirrors DELETE /events/:id)
+    const hasPermission = await isOwnerOrAdmin(userId, event.group_id);
+    if (!hasPermission) {
+      return res.status(403).json({ error: 'Only group owners and admins can remove participants' });
+    }
+
+    const participation = await EventParticipation.findOne({
+      where: { event_id, user_id: participationUserId },
+    });
+    if (!participation) {
+      return res.status(404).json({ error: 'Participation not found' });
+    }
+
+    // Hard-destroy first (chosen over soft-delete — see header comment).
+    await participation.destroy();
+
+    // Audit-log write — non-fatal, never block the destroy.
+    // suppressed_email is moot here (we don't send any email on this action),
+    // recorded as false. was_after_start / was_within_15min_grace use the
+    // same comparisons as the delete-event handler so reports stay consistent.
+    try {
+      const removeNowMs = Date.now();
+      const startMs = event.start_date ? new Date(event.start_date).getTime() : 0;
+      const wasAfterStart = startMs > 0 && removeNowMs >= startMs;
+      const wasWithin15MinGrace = wasAfterStart && removeNowMs < startMs + FIFTEEN_MIN_MS;
+
+      await EventAuditLog.create({
+        event_id: event.id,
+        group_id: event.group_id,
+        actor_user_id: userId,
+        action: 'remove_participant',
+        was_after_start: wasAfterStart,
+        was_within_15min_grace: wasWithin15MinGrace,
+        suppressed_email: false,
+        event_snapshot: {
+          id: event.id,
+          group_id: event.group_id,
+          game_id: event.game_id,
+          start_date: event.start_date,
+          duration_minutes: event.duration_minutes,
+          location: event.location || null,
+          comments: event.comments || null,
+          removed_user_id: participationUserId,
+        },
+      });
+    } catch (auditErr) {
+      console.error('[events:remove-participant] audit log write failed (non-fatal):', auditErr.message);
+    }
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('Error removing participant:', error);
     res.status(500).json({ error: error.message });
   }
 });
