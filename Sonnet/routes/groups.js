@@ -1,7 +1,7 @@
 // routes/groups.js
 const express = require('express');
 const crypto = require('crypto');
-const { Group, User, UserGroup, Event, Game, EventParticipation, GameReview, UserGame } = require('../models');
+const { Group, User, UserGroup, Event, Game, EventParticipation, GameReview, UserGame, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const router = express.Router();
 const { validateGroupCreate, validateGroupUpdate, validateUUID } = require('../middleware/validators');
@@ -564,6 +564,58 @@ router.post('/:group_id/leave', async (req, res) => {
     res.json({ success: true, message: 'You have left the group' });
   } catch (error) {
     console.error('Error leaving group:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Transfer group ownership to another active member (owner only)
+// Atomically swaps the requesting owner -> 'admin' and target member -> 'owner' in a single transaction.
+router.post('/:group_id/transfer-ownership', async (req, res) => {
+  try {
+    const userId = req.user.user_id;
+    const { group_id } = req.params;
+    const { new_owner_user_id } = req.body || {};
+
+    // 1. Body validation
+    if (!new_owner_user_id || typeof new_owner_user_id !== 'string') {
+      return res.status(400).json({ error: 'new_owner_user_id is required' });
+    }
+
+    // 2. Self-transfer guard
+    if (new_owner_user_id === userId) {
+      return res.status(400).json({ error: 'Cannot transfer ownership to yourself' });
+    }
+
+    // 3. Requester must be the current active owner
+    const requesterUg = await UserGroup.findOne({
+      where: { user_id: userId, group_id, status: 'active' },
+    });
+    if (!requesterUg || requesterUg.role !== 'owner') {
+      return res.status(403).json({ error: 'Only the group owner can transfer ownership' });
+    }
+
+    // 4. Target must be an active member (pending members are filtered out by status: 'active')
+    const targetUg = await UserGroup.findOne({
+      where: { user_id: new_owner_user_id, group_id, status: 'active' },
+    });
+    if (!targetUg) {
+      return res.status(404).json({ error: 'Target user is not an active member of this group' });
+    }
+
+    // Atomic role swap — must be both-or-neither to avoid two-owners / zero-owners states.
+    await sequelize.transaction(async (t) => {
+      await requesterUg.update({ role: 'admin' }, { transaction: t });
+      await targetUg.update({ role: 'owner' }, { transaction: t });
+    });
+
+    res.json({
+      success: true,
+      message: 'Ownership transferred',
+      new_owner_user_id,
+      previous_owner_user_id: userId,
+    });
+  } catch (error) {
+    console.error('Error transferring group ownership:', error);
     res.status(500).json({ error: error.message });
   }
 });
