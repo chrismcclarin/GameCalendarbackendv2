@@ -112,3 +112,65 @@ describe('Frontend ballotAPI client', () => {
     expect(apiCode).toContain('resolveTie');
   });
 });
+
+// POLL-06 (Phase 71-03): gate-coverage tests on the vote handler.
+// Verifies the belt-and-suspenders gate is structurally present in
+// the ballot route source so future refactors do not silently drop it.
+describe('POLL-06 vote gate coverage (structural)', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const ballotSource = fs.readFileSync(
+    path.join(__dirname, '../../routes/ballot.js'),
+    'utf-8'
+  );
+
+  // Isolate the POST /:eventId/vote handler body (between its declaration
+  // and the next route declaration) so we don't accidentally match
+  // gates from sibling handlers.
+  const voteHandlerStart = ballotSource.indexOf("router.post('/:eventId/vote'");
+  expect(voteHandlerStart).toBeGreaterThan(-1);
+  const afterVote = ballotSource.indexOf("router.post('/:eventId/resolve-tie'", voteHandlerStart);
+  const voteHandler = ballotSource.slice(voteHandlerStart, afterVote);
+
+  it('vote handler enforces the active-member predicate (H-D edge case)', () => {
+    expect(voteHandler).toMatch(/isActiveMember\s*\(\s*userId\s*,\s*event\.group_id\s*\)/);
+    // Must 403 when not an active member
+    expect(voteHandler).toMatch(/Only active members of this group can vote/);
+  });
+
+  it('vote handler enforces the yes/maybe RSVP predicate (D-BALLOT-02)', () => {
+    // The gate must check status is in ['yes', 'maybe'] explicitly.
+    // After the 71-03 patch the lookup is unconditional and the membership
+    // check is in code (not in the SQL where-clause), so both shapes are
+    // acceptable: predicate-in-where OR predicate-in-code.
+    const inSqlWhere = /status:\s*\{\s*\[Op\.in\]\s*:\s*\[\s*'yes'\s*,\s*'maybe'\s*\]/.test(voteHandler);
+    const inCode = /\['yes'\s*,\s*'maybe'\]\s*\.includes\s*\(\s*rsvp\.status\s*\)/.test(voteHandler);
+    expect(inSqlWhere || inCode).toBe(true);
+    // 403 message must communicate the predicate to the user
+    expect(voteHandler).toMatch(/Only attendees who RSVPed Yes or Maybe can vote/);
+  });
+
+  it('vote handler 403 message includes the user\'s actual RSVP status (UX clarity)', () => {
+    // After the 71-03 patch, the 403 message includes the status (or 'not set')
+    // so users understand WHY they were rejected.
+    expect(voteHandler).toMatch(/your RSVP is currently/);
+  });
+
+  it('vote handler runs the gate BEFORE EventBallotVote.create (no race)', () => {
+    const createIdx = voteHandler.indexOf('EventBallotVote.create');
+    const memberIdx = voteHandler.indexOf('isActiveMember');
+    const rsvpIdx = voteHandler.indexOf('EventRsvp.findOne');
+    expect(createIdx).toBeGreaterThan(-1);
+    expect(memberIdx).toBeGreaterThan(-1);
+    expect(rsvpIdx).toBeGreaterThan(-1);
+    expect(memberIdx).toBeLessThan(createIdx);
+    expect(rsvpIdx).toBeLessThan(createIdx);
+  });
+
+  it('only ONE EventBallotVote.create site exists in the ballot route', () => {
+    // Ensure no future patch silently adds an ungated parallel write path.
+    const matches = ballotSource.match(/EventBallotVote\.(create|upsert|findOrCreate|bulkCreate)/g) || [];
+    expect(matches.length).toBe(1);
+    expect(matches[0]).toBe('EventBallotVote.create');
+  });
+});

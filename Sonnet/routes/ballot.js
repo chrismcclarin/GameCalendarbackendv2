@@ -322,16 +322,31 @@ router.post('/:eventId/vote', validateBallotVote, async (req, res) => {
       return res.status(400).json({ error: 'Voting is closed for this ballot' });
     }
 
-    // Verify user has Yes or Maybe RSVP for this event
+    // POLL-06 (D-BALLOT-02 + D-BALLOT-06 + D-BALLOT-07):
+    // Belt-and-suspenders gate. Apply to ALL ballots immediately, NO flag.
+    //
+    // 1. Active group membership (closes the H-D edge case from the POLL-06
+    //    investigation: a non-member-with-stale-EventRsvp could otherwise
+    //    pass the RSVP-only gate that lived here previously). isActiveMember
+    //    matches the existing predicate used on GET /:eventId.
+    // 2. Yes/Maybe RSVP for this event (D-BALLOT-02 — keep current scope).
+    //    Look up the row WITHOUT a status filter so we can include the
+    //    actual status in the 403 message ("...your RSVP is currently no").
+    const isMember = await isActiveMember(userId, event.group_id);
+    if (!isMember) {
+      return res.status(403).json({
+        error: 'Only active members of this group can vote on the ballot',
+      });
+    }
+
     const rsvp = await EventRsvp.findOne({
-      where: {
-        event_id: eventId,
-        user_id: userId,
-        status: { [Op.in]: ['yes', 'maybe'] },
-      },
+      where: { event_id: eventId, user_id: userId },
     });
-    if (!rsvp) {
-      return res.status(403).json({ error: 'Only attendees who RSVPed Yes or Maybe can vote' });
+    if (!rsvp || !['yes', 'maybe'].includes(rsvp.status)) {
+      const currentStatus = rsvp?.status || 'not set';
+      return res.status(403).json({
+        error: `Only attendees who RSVPed Yes or Maybe can vote — your RSVP is currently ${currentStatus}`,
+      });
     }
 
     // Verify the option belongs to this event
