@@ -1,7 +1,21 @@
 // routes/groups.js
 const express = require('express');
 const crypto = require('crypto');
-const { Group, User, UserGroup, Event, Game, EventParticipation, GameReview, UserGame, sequelize } = require('../models');
+const {
+  Group,
+  User,
+  UserGroup,
+  Event,
+  Game,
+  EventParticipation,
+  EventRsvp,
+  EventBring,
+  EventBallotOption,
+  EventBallotVote,
+  GameReview,
+  UserGame,
+  sequelize,
+} = require('../models');
 const { Op } = require('sequelize');
 const router = express.Router();
 const { validateGroupCreate, validateGroupUpdate, validateUUID } = require('../middleware/validators');
@@ -12,6 +26,81 @@ const {
   isActiveMember,
   stripMemberPII,
 } = require('../services/authorizationService');
+
+// Phase 71.1-02 (post-checkpoint scope expansion): when a user leaves a group
+// (voluntary self-leave OR admin/owner removal), cascade-delete their per-user
+// rows on FUTURE group events so organizers don't see floating RSVP / brings /
+// ballot-vote rows with no participant record. Past/completed events are
+// preserved verbatim — they carry historical attendance, score, and placement
+// data that must never be rewritten by a membership change.
+//
+// Scope: events where `start_date > NOW()` AND status IN ('scheduled', 'in_progress').
+//
+// FK type asymmetry (load-bearing — do NOT normalize):
+//   - EventParticipation.user_id  = UUID    (User.id)
+//   - EventRsvp.user_id           = STRING  (Auth0 user_id)
+//   - EventBring.user_id          = STRING  (Auth0 user_id)
+//   - EventBallotVote.user_id     = STRING  (Auth0 user_id) — joined to event
+//                                          via EventBallotOption.event_id
+// The asymmetry is required by email-link RSVP /respond, eventBrings my-brings
+// gates, and the game-only-participant flow (Phase 71.1). See
+// `.planning/phases/71.1-game-only-participant-read-access/71.1-01-SUMMARY.md`.
+//
+// Audit log: this helper deliberately does NOT write EventAuditLog
+// `remove_participant` rows. Those are reserved for the per-event Remove flow
+// (Phase 65-01 EVT-08) which triggers the silent-welcome-back suppression on
+// re-join. A leave-group cascade should NOT silence the per-event
+// welcome-back if the user later QR-rejoins a specific event — they left the
+// group, not any individual event explicitly.
+async function cascadeDeleteFutureEventDataOnLeaveGroup({
+  authUserId,
+  userUuid,
+  group_id,
+  transaction,
+}) {
+  const now = new Date();
+  const futureEvents = await Event.findAll({
+    where: {
+      group_id,
+      start_date: { [Op.gt]: now },
+      status: { [Op.in]: ['scheduled', 'in_progress'] },
+    },
+    attributes: ['id'],
+    transaction,
+  });
+  if (futureEvents.length === 0) return;
+  const futureEventIds = futureEvents.map(e => e.id);
+
+  await EventParticipation.destroy({
+    where: { event_id: { [Op.in]: futureEventIds }, user_id: userUuid },
+    transaction,
+  });
+  await EventRsvp.destroy({
+    where: { event_id: { [Op.in]: futureEventIds }, user_id: authUserId },
+    transaction,
+  });
+  await EventBring.destroy({
+    where: { event_id: { [Op.in]: futureEventIds }, user_id: authUserId },
+    transaction,
+  });
+
+  // EventBallotVote is keyed by option_id, not event_id — JOIN through
+  // EventBallotOption to scope votes to this group's future events.
+  const futureBallotOptions = await EventBallotOption.findAll({
+    where: { event_id: { [Op.in]: futureEventIds } },
+    attributes: ['id'],
+    transaction,
+  });
+  if (futureBallotOptions.length > 0) {
+    await EventBallotVote.destroy({
+      where: {
+        option_id: { [Op.in]: futureBallotOptions.map(o => o.id) },
+        user_id: authUserId,
+      },
+      transaction,
+    });
+  }
+}
 
 // Get all groups for a user
 // user_id is now extracted from verified JWT token (req.user.user_id)
@@ -651,7 +740,25 @@ router.post('/:group_id/leave', async (req, res) => {
       return res.status(403).json({ error: 'Group owner cannot leave. Transfer ownership or delete the group.' });
     }
 
-    await userGroup.destroy();
+    // Phase 71.1-02: atomic membership removal + future-event cascade.
+    // Resolve caller's User.id UUID inside the transaction so the cascade
+    // helper can target EventParticipation rows (UUID-keyed) correctly.
+    await sequelize.transaction(async (t) => {
+      const callerRow = await User.findOne({
+        where: { user_id: userId },
+        attributes: ['id'],
+        transaction: t,
+      });
+      if (callerRow) {
+        await cascadeDeleteFutureEventDataOnLeaveGroup({
+          authUserId: userId,
+          userUuid: callerRow.id,
+          group_id,
+          transaction: t,
+        });
+      }
+      await userGroup.destroy({ transaction: t });
+    });
 
     res.json({ success: true, message: 'You have left the group' });
   } catch (error) {
@@ -756,8 +863,19 @@ router.delete('/:group_id/users/:target_user_id', async (req, res) => {
       return res.status(404).json({ error: 'User is not a member of this group' });
     }
 
-    await targetUserGroup.destroy();
-    
+    // Phase 71.1-02: atomic membership removal + future-event cascade.
+    // targetUser has both user_id (Auth0 string) and id (UUID) already loaded
+    // at line ~727, so no extra lookup is needed here.
+    await sequelize.transaction(async (t) => {
+      await cascadeDeleteFutureEventDataOnLeaveGroup({
+        authUserId: targetUser.user_id,
+        userUuid: targetUser.id,
+        group_id,
+        transaction: t,
+      });
+      await targetUserGroup.destroy({ transaction: t });
+    });
+
     res.json({ message: 'User removed from group successfully' });
   } catch (error) {
     res.status(500).json({ error: error.message });
