@@ -1,6 +1,6 @@
 // routes/users.js
 const express = require('express');
-const { User, Group, UserGroup } = require('../models');
+const { User, Group, UserGroup, sequelize } = require('../models');
 const router = express.Router();
 const { validateUserSearch } = require('../middleware/validators');
 const { writeOperationLimiter } = require('../middleware/rateLimiter');
@@ -618,6 +618,71 @@ router.post('/:user_id/phone/verify', async (req, res) => {
     res.json({ verified: false, error: 'Invalid or expired code' });
   } catch (error) {
     console.error('[users] Phone verification check failed:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Remove phone number (D-PHONE-02 cascade): clear phone, phone_verified,
+// sms_enabled, and all 4 notification_preferences[type].sms toggles in ONE
+// atomic Sequelize transaction. If any field write fails, the user record is
+// rolled back to its prior state — never half-cleared. Returns the updated
+// user so the frontend can refresh local state without a second fetch.
+router.delete('/:user_id/phone', async (req, res) => {
+  try {
+    const userId = req.user?.user_id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    if (req.params.user_id !== userId) {
+      return res.status(403).json({ error: 'Forbidden: Cannot update other users\' phone numbers' });
+    }
+
+    const user = await User.findOne({ where: { user_id: userId } });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Build cleared notification_preferences. Mirrors DEFAULT_PREFERENCES
+    // shape from periodictabletop/src/app/userProfile/page.js (lines 29-34):
+    // 4 keys (event_created, reminder, event_updated, event_cancelled), each
+    // with email + sms (and reminder.window_hours). Preserve existing email
+    // values + reminder.window_hours; only flip every sms key to false.
+    const existingPrefs = user.notification_preferences || {};
+    const PREF_KEYS = ['event_created', 'reminder', 'event_updated', 'event_cancelled'];
+    const clearedPrefs = {};
+    for (const key of PREF_KEYS) {
+      const existing = existingPrefs[key] || {};
+      const cleared = {
+        email: existing.email !== undefined ? existing.email : true,
+        sms: false,
+      };
+      if (key === 'reminder') {
+        cleared.window_hours = existing.window_hours !== undefined ? existing.window_hours : 1;
+      }
+      clearedPrefs[key] = cleared;
+    }
+
+    // Atomic cascade. Wrap a single user.update() in sequelize.transaction so
+    // future expansion (e.g. clearing sms_welcome_sent_at) stays atomic by
+    // construction. Rollback on any failure prevents half-cleared state.
+    await sequelize.transaction(async (t) => {
+      await user.update(
+        {
+          phone: null,
+          phone_verified: false,
+          sms_enabled: false,
+          notification_preferences: clearedPrefs,
+        },
+        { transaction: t }
+      );
+    });
+
+    // Re-read to return the post-cascade state to the client.
+    await user.reload();
+    res.json(user);
+  } catch (error) {
+    console.error('[users] Phone removal cascade failed:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
