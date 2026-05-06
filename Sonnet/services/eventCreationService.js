@@ -262,7 +262,14 @@ async function sendConfirmationEmails(event, users, group, game) {
 
   try {
     const frontendUrl = process.env.FRONTEND_URL || process.env.AUTH0_BASE_URL || 'http://localhost:3000';
-    const eventUrl = `${frontendUrl}/groups/${event.group_id}/events/${event.id}`;
+    // POLL-04 (D-SMS-LINK-01): use the canonical /gameDetail?event_id={id}
+    // path. The previous /groups/{gid}/events/{eid} route does not exist on
+    // the frontend (no app/groups/[id]/events/ directory), so the prior
+    // SMS-body link 404'd. The gameDetail page already handles the
+    // event_id query param (event-only branch at line 693-ish) and now
+    // also renders a friendly "Event not found" state for missing/cancelled
+    // event IDs (D-SMS-LINK-04).
+    const eventUrl = `${frontendUrl}/gameDetail?event_id=${event.id}`;
 
     // Send individual emails per recipient to respect each user's timezone
     const validUsers = users.filter(u => u.email);
