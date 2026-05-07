@@ -1,8 +1,9 @@
 // routes/events.js
 const express = require('express');
 const crypto = require('crypto');
-const { Event, Game, User, Group, EventParticipation, UserGroup, EventRsvp, EventBallotOption, EventAuditLog } = require('../models');
+const { Event, Game, User, Group, EventParticipation, UserGroup, EventRsvp, EventBring, EventBallotOption, EventBallotVote, EventAuditLog } = require('../models');
 const { Op } = require('sequelize');
+const sequelize = require('../config/database');
 const router = express.Router();
 const auth0Service = require('../services/auth0Service');
 const googleCalendarService = require('../services/googleCalendarService');
@@ -1168,8 +1169,53 @@ router.delete('/:event_id/participations/:user_id', validateUUID('event_id'), va
       return res.status(404).json({ error: 'Participation not found' });
     }
 
-    // Hard-destroy first (chosen over soft-delete — see header comment).
-    await participation.destroy();
+    // Phase 71.1-02: cascade RSVP / brings / ballot votes for this user on
+    // this event. Game-only participants have no group membership to leave
+    // from, so leave-event is their only exit — without the cascade their
+    // forward-commitment rows orphan and remain visible to organizers.
+    //
+    // The :user_id path param is the User.id UUID (matches
+    // EventParticipation.user_id). Resolve the target's Auth0 string user_id
+    // for the RSVP / EventBring / EventBallotVote where-clauses (those tables
+    // are Auth0-string-keyed; the user_id type asymmetry is load-bearing —
+    // see services/authorizationService.js).
+    //
+    // Hard-destroy on EventParticipation chosen over soft-delete (see header
+    // comment). Wrap participation destroy + cascade in a single transaction
+    // so the membership removal and side-row cleanup are atomic.
+    await sequelize.transaction(async (t) => {
+      await participation.destroy({ transaction: t });
+
+      const targetUser = await User.findByPk(participationUserId, {
+        attributes: ['user_id'],
+        transaction: t,
+      });
+      if (targetUser) {
+        const targetAuth0Id = targetUser.user_id;
+        await EventRsvp.destroy({
+          where: { event_id, user_id: targetAuth0Id },
+          transaction: t,
+        });
+        await EventBring.destroy({
+          where: { event_id, user_id: targetAuth0Id },
+          transaction: t,
+        });
+        const ballotOptions = await EventBallotOption.findAll({
+          where: { event_id },
+          attributes: ['id'],
+          transaction: t,
+        });
+        if (ballotOptions.length > 0) {
+          await EventBallotVote.destroy({
+            where: {
+              option_id: { [Op.in]: ballotOptions.map(o => o.id) },
+              user_id: targetAuth0Id,
+            },
+            transaction: t,
+          });
+        }
+      }
+    });
 
     // Audit-log write — non-fatal, never block the destroy.
     // suppressed_email is moot here (we don't send any email on this action),
