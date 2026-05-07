@@ -442,23 +442,28 @@ Review suggestions: ${dashboardUrl}
 
     const subject = `${groupName || 'Your group'} - poll closed - schedule a session?`;
 
-    // Slot cards
-    const slotCardsHtml = sortedSlots
-      .map((slot) => {
-        const display = this.escapeHtml(formatSlotForDisplay(slot));
-        const ctaUrl = buildSlotCtaUrl(slot);
-        return `
-        <div style="background-color: #ffffff; border: 1px solid #E5E7EB; border-radius: 8px; padding: 16px; margin: 12px 0;">
-          <p style="margin: 0 0 12px 0; font-size: 16px; color: #111827;"><strong>${display}</strong></p>
-          <a href="${ctaUrl}" class="button" style="display: inline-block; padding: 10px 20px; background-color: #4F46E5; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">Schedule it?</a>
-        </div>`;
-      })
-      .join('');
+    // Phase 71.2 / Plan 03 hotfix — collapse to ONE Schedule it? CTA. The
+    // landing page (createEvent modal in /groupPlanning) renders a heatmap
+    // restricted to this poll's submitted responses so the recipient picks
+    // a time visually instead of choosing from N pre-formatted options.
+    const topSlotPreview = sortedSlots.length
+      ? this.escapeHtml(formatSlotForDisplay(sortedSlots[0]))
+      : null;
+    const intro = topSlotPreview
+      ? sortedSlots.length === 1
+        ? `The best time was <strong>${topSlotPreview}</strong>.`
+        : `${sortedSlots.length} times tied for best — top: <strong>${topSlotPreview}</strong>.`
+      : 'Responses are in.';
 
-    const intro =
-      sortedSlots.length === 1
-        ? `The best time was <strong>${this.escapeHtml(formatSlotForDisplay(sortedSlots[0]))}</strong>. Want to schedule it?`
-        : `${sortedSlots.length} times tied for best. Pick one to schedule:`;
+    const singleCtaParams = new URLSearchParams();
+    if (groupId) singleCtaParams.set('group_id', groupId);
+    if (promptId) singleCtaParams.set('prompt_id', promptId);
+    const singleCtaUrl = `${baseUrl}?${singleCtaParams.toString()}`;
+    const slotCardsHtml = `
+        <div style="text-align: center; margin: 24px 0;">
+          <a href="${singleCtaUrl}" class="button" style="display: inline-block; padding: 12px 28px; background-color: #4F46E5; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 16px;">Schedule a session</a>
+          <p style="font-size: 13px; color: #6B7280; margin-top: 12px;">Opens the planning page with the poll's results filled in.</p>
+        </div>`;
 
     const gameLine = safeGameName
       ? `<p>The poll was for <strong>${safeGameName}</strong>.</p>`
@@ -506,19 +511,12 @@ Review suggestions: ${dashboardUrl}
 </html>
     `.trim();
 
-    // Plain-text version mirrors the html copy.
-    const textSlotsList = sortedSlots
-      .map((slot) => {
-        const display = formatSlotForDisplay(slot);
-        const ctaUrl = buildSlotCtaUrl(slot);
-        return `- ${display}\n  Schedule it? ${ctaUrl}`;
-      })
-      .join('\n\n');
-
-    const textIntro =
-      sortedSlots.length === 1
-        ? `The best time was ${formatSlotForDisplay(sortedSlots[0])}. Want to schedule it?`
-        : `${sortedSlots.length} times tied for best. Pick one to schedule:`;
+    // Plain-text version mirrors the single-CTA html copy.
+    const textIntro = sortedSlots.length
+      ? sortedSlots.length === 1
+        ? `The best time was ${formatSlotForDisplay(sortedSlots[0])}.`
+        : `${sortedSlots.length} times tied for best — top: ${formatSlotForDisplay(sortedSlots[0])}.`
+      : 'Responses are in.';
 
     const text = `
 Hi ${recipientName || 'there'},
@@ -527,9 +525,9 @@ Your availability poll for ${groupName || 'your group'} has closed.${gameName ? 
 
 ${textIntro}
 
-${textSlotsList}
+Schedule a session: ${singleCtaUrl}
 
-If none of these work, you can pick a different time on the planning page: ${fallbackPlanningUrl}
+(The planning page will show a heatmap of just this poll's responses so you can pick visually.)
 
 ---
 This is an automated notification from Next Game Night.

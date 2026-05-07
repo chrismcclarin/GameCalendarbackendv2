@@ -8,6 +8,7 @@ const { verifyAuth0Token } = require('../middleware/auth0');
 const {
   AvailabilityPrompt,
   AvailabilityResponse,
+  AvailabilitySuggestion,
   User,
   UserGroup,
   Group,
@@ -582,6 +583,156 @@ router.get('/groups/:groupId/prompts/open', verifyAuth0Token, async (req, res) =
   } catch (error) {
     console.error('Error fetching open prompts:', error);
     res.status(500).json({ error: 'Failed to fetch open prompts' });
+  }
+});
+
+
+/**
+ * GET /api/prompts/:promptId/heatmap
+ * Phase 71.2 / Plan 03 hotfix — return a heatmap shape ({slots, totalMembers, ...})
+ * derived ONLY from this prompt's submitted responses, so the createEvent modal
+ * arriving via the close-notification "Schedule it?" CTA can render a visual
+ * picker that reflects the poll's results, not the group's standard availability.
+ *
+ * Reuses the existing AvailabilitySuggestion table (computed by
+ * heatmapService.aggregateResponses, which the lifecycle service now invokes
+ * on close). Each suggestion is one 30-min sub-slot; we AND consecutive halves
+ * (HH:00 + HH:30) into one hour slot, matching availabilityService.getGroupHeatmap's
+ * shape, so EventHeatmapBackground can render unchanged.
+ *
+ * Auth: must be active member of the prompt's group OR the poll creator.
+ */
+router.get('/prompts/:promptId/heatmap', verifyAuth0Token, async (req, res) => {
+  try {
+    const { promptId } = req.params;
+    const userId = req.user.user_id;
+
+    const prompt = await AvailabilityPrompt.findByPk(promptId);
+    if (!prompt) return res.status(404).json({ error: 'Prompt not found' });
+
+    // Authz — active group member is fine; the poll creator gets through even
+    // if their UserGroup lapsed (consistent with the close-notification email
+    // recipient resolution).
+    const userGroup = await UserGroup.findOne({
+      where: { group_id: prompt.group_id, user_id: userId, status: 'active' }
+    });
+    if (!userGroup) {
+      const dbUser = await User.findOne({ where: { user_id: userId } });
+      if (!dbUser || dbUser.id !== prompt.created_by_user_id) {
+        return res.status(403).json({ error: 'You must be a member of this group' });
+      }
+    }
+
+    const suggestions = await AvailabilitySuggestion.findAll({
+      where: { prompt_id: promptId },
+      attributes: ['suggested_start', 'suggested_end', 'participant_user_ids', 'preferred_count', 'participant_count'],
+      order: [['suggested_start', 'ASC']],
+    });
+
+    // totalMembers = distinct users with submitted responses on this prompt.
+    const submittedResponses = await AvailabilityResponse.findAll({
+      where: { prompt_id: promptId, submitted_at: { [Op.ne]: null } },
+      attributes: ['user_id'],
+    });
+    const totalMembers = new Set(submittedResponses.map(r => r.user_id)).size;
+
+    if (!suggestions.length) {
+      return res.json({
+        weekStart: null,
+        weekEnd: null,
+        totalMembers,
+        totalGroupMembers: totalMembers,
+        membersWithData: totalMembers,
+        membersWithoutData: [],
+        membersWithoutDataCount: 0,
+        gcalConflicts: [],
+        slots: [],
+      });
+    }
+
+    // Resolve usernames for all participant Auth0 user_ids in one query.
+    const allParticipantIds = new Set();
+    for (const s of suggestions) {
+      const ids = Array.isArray(s.participant_user_ids) ? s.participant_user_ids : [];
+      for (const id of ids) allParticipantIds.add(id);
+    }
+    const users = await User.findAll({
+      where: { user_id: Array.from(allParticipantIds) },
+      attributes: ['user_id', 'username'],
+    });
+    const usernameByUserId = new Map(users.map(u => [u.user_id, u.username]));
+
+    // Bucket suggestions by (date, hour) — keyed by ISO date string of the
+    // suggestion's UTC suggested_start. Each hour bucket holds the two
+    // half-hour participant_user_ids arrays. We intersect them so a user
+    // counts as available for the hour only if both halves include them
+    // (matches getGroupHeatmap line 845-852 AND-logic).
+    const hourBuckets = new Map(); // key = `${dateStr}_${hour}` → { dateStr, hour, halfA: Set|null, halfB: Set|null }
+    for (const s of suggestions) {
+      const start = new Date(s.suggested_start);
+      const dateStr = start.toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
+      const hour = start.getUTCHours();
+      const minute = start.getUTCMinutes();
+      const key = `${dateStr}_${hour}`;
+      const ids = new Set(Array.isArray(s.participant_user_ids) ? s.participant_user_ids : []);
+      let bucket = hourBuckets.get(key);
+      if (!bucket) {
+        bucket = { dateStr, hour, halfA: null, halfB: null };
+        hourBuckets.set(key, bucket);
+      }
+      if (minute === 0) bucket.halfA = ids;
+      else if (minute === 30) bucket.halfB = ids;
+    }
+
+    // Compute ISO day-of-week (1-7, Mon=1) per dateStr (one Date construction per bucket is fine at this scale).
+    const isoDayOfWeek = (dateStr) => {
+      const d = new Date(`${dateStr}T00:00:00Z`);
+      const js = d.getUTCDay(); // 0=Sun..6=Sat
+      return js === 0 ? 7 : js;
+    };
+
+    const slots = [];
+    for (const bucket of hourBuckets.values()) {
+      // Need both halves present and non-empty to compute an intersection;
+      // if only one half exists, the user wasn't available for the full hour.
+      const a = bucket.halfA || new Set();
+      const b = bucket.halfB || new Set();
+      const intersection = [];
+      for (const uid of a) {
+        if (b.has(uid)) intersection.push(uid);
+      }
+      slots.push({
+        date: bucket.dateStr,
+        dayOfWeek: isoDayOfWeek(bucket.dateStr),
+        hour: bucket.hour,
+        availableCount: intersection.length,
+        totalMembers,
+        availableMembers: intersection.map(uid => ({
+          user_id: uid,
+          username: usernameByUserId.get(uid) || 'Member',
+        })),
+      });
+    }
+
+    // Pick week bounds for display from the slot range.
+    const dates = slots.map(s => s.date).sort();
+    const weekStart = dates.length ? dates[0] : null;
+    const weekEnd = dates.length ? dates[dates.length - 1] : null;
+
+    res.json({
+      weekStart,
+      weekEnd,
+      totalMembers,
+      totalGroupMembers: totalMembers,
+      membersWithData: totalMembers,
+      membersWithoutData: [],
+      membersWithoutDataCount: 0,
+      gcalConflicts: [],
+      slots,
+    });
+  } catch (error) {
+    console.error('Error building prompt heatmap:', error);
+    res.status(500).json({ error: 'Failed to build prompt heatmap' });
   }
 });
 
