@@ -361,6 +361,20 @@ router.post('/prompts', verifyAuth0Token, async (req, res) => {
       }
     }
 
+    // Phase 71.2 / Plan 03 hotfix — fan out invitation emails to active group
+    // members so they can respond. Best-effort; failures are logged per recipient
+    // and don't block the 201 response.
+    try {
+      const promptInvitationService = require('../services/promptInvitationService');
+      // Don't await — fanout can take seconds for large groups; the client
+      // already has its 201. Rely on the service's internal logging for visibility.
+      promptInvitationService.notifyMembersOfPrompt(prompt).catch((err) => {
+        console.error('[POST /prompts] invitation fanout error (non-fatal):', err.message);
+      });
+    } catch (err) {
+      console.error('[POST /prompts] failed to dispatch invitation fanout:', err.message);
+    }
+
     res.status(201).json({
       message: 'Prompt created successfully',
       prompt: {
