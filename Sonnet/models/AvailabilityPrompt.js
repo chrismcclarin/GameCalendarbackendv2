@@ -106,12 +106,20 @@ const AvailabilityPrompt = sequelize.define('AvailabilityPrompt', {
     },
     {
       fields: ['created_by_user_id']
-    },
-    {
-      unique: true,
-      fields: ['group_id', 'week_identifier'],
-      name: 'availability_prompts_group_week_unique'
     }
+    // Phase 71.2: the legacy `availability_prompts_group_week_unique` UNIQUE
+    // index on (group_id, week_identifier) was removed in migration
+    // 20260507000005-restrict-week-uniqueness-to-auto.js. It was replaced by
+    // a PARTIAL unique index that only applies to auto-prompts
+    // (`availability_prompts_auto_group_week_unique` —
+    // WHERE created_by_user_id IS NULL AND week_identifier IS NOT NULL) so
+    // that manual polls can stack within a week after close. The "one open
+    // manual poll per group" cap lives in `availability_prompts_one_open_manual`
+    // (migration 20260507000004) — also a partial index. Sequelize's
+    // model-level `indexes` array doesn't support partial WHERE clauses, so
+    // both indexes are owned exclusively by their migrations and we list
+    // nothing here for them. Re-declaring them here would cause sync() to
+    // recreate the unscoped legacy index and re-introduce the 71.2 bug.
   ]
 });
 
