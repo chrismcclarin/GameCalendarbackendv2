@@ -66,32 +66,59 @@ function calculateDeadline(deadlineHours) {
 }
 
 const promptWorker = new Worker('prompts', async (job) => {
-  const { groupId, settingsId, timezone, deadlineMinutes } = job.data;
-  console.log(`[PromptWorker] Processing job for group ${groupId}`);
+  const { groupId, settingsId, scheduleId, timezone, deadlineMinutes } = job.data;
+  console.log(`[PromptWorker] Processing job for group ${groupId} schedule ${scheduleId || '(legacy)'}`);
 
-  // Idempotency check: avoid duplicate prompts for same week
-  const weekIdentifier = getISOWeek(new Date());
-
-  const existingPrompt = await AvailabilityPrompt.findOne({
-    where: { group_id: groupId, week_identifier: weekIdentifier }
-  });
-
-  if (existingPrompt) {
-    console.log(`[PromptWorker] Prompt already exists for ${weekIdentifier}, skipping`);
-    return { skipped: true, reason: 'duplicate_week', promptId: existingPrompt.id };
-  }
-
-  // Get settings for deadline calculation
+  // Get settings first — we need the nested schedule object before we can
+  // build a per-schedule dedup key.
   const settings = await GroupPromptSettings.findByPk(settingsId);
   if (!settings) {
     throw new Error(`GroupPromptSettings ${settingsId} not found`);
   }
 
-  // Find the schedule that likely triggered this job based on current day
-  const currentDayOfWeek = new Date().getDay();
-  const activeSchedules = (settings.template_config?.schedules || []).filter(s => s.is_active !== false && !s.deleted_at);
-  const triggeringSchedule = activeSchedules.find(s => s.schedule_day_of_week === currentDayOfWeek) || activeSchedules[0] || null;
+  // Resolve the specific nested schedule that fired this job.
+  const allSchedules = settings.template_config?.schedules || [];
+  let triggeringSchedule = null;
+  if (scheduleId) {
+    triggeringSchedule = allSchedules.find(s => s.id === scheduleId) || null;
+    if (!triggeringSchedule) {
+      // Schedule was deleted between fire and process — idempotent no-op.
+      console.log(`[PromptWorker] Schedule ${scheduleId} no longer exists in settings ${settingsId}, skipping`);
+      return { skipped: true, reason: 'schedule_deleted', scheduleId };
+    }
+    if (triggeringSchedule.deleted_at || triggeringSchedule.is_active === false) {
+      console.log(`[PromptWorker] Schedule ${scheduleId} is deleted/inactive, skipping`);
+      return { skipped: true, reason: 'schedule_inactive', scheduleId };
+    }
+  } else {
+    // Legacy job (pre-fix) lacking scheduleId — fall back to "first active
+    // schedule on today's day-of-week", same heuristic as before. Logged so
+    // we can confirm legacy jobs drain after one cycle.
+    console.warn(`[PromptWorker] Legacy job without scheduleId for group ${groupId} — using day-of-week heuristic`);
+    const currentDayOfWeek = new Date().getDay();
+    const activeSchedules = allSchedules.filter(s => s.is_active !== false && !s.deleted_at);
+    triggeringSchedule = activeSchedules.find(s => s.schedule_day_of_week === currentDayOfWeek) || activeSchedules[0] || null;
+  }
+
+  // Per-schedule dedup key — prevents two schedules in the same group/week
+  // (e.g., Tue Catan + Sat Wingspan) from colliding on the existing-prompt check.
+  const weekIdentifier = getISOWeek(new Date());
+  const dedupScheduleKey = triggeringSchedule?.id || scheduleId || 'legacy';
+  const dedupKey = `${weekIdentifier}-${dedupScheduleKey}`;
+
+  const existingPrompt = await AvailabilityPrompt.findOne({
+    where: { group_id: groupId, week_identifier: dedupKey }
+  });
+
+  if (existingPrompt) {
+    console.log(`[PromptWorker] Prompt already exists for ${dedupKey}, skipping`);
+    return { skipped: true, reason: 'duplicate_week', promptId: existingPrompt.id };
+  }
+
   const scheduleGameId = triggeringSchedule?.game_id || null;
+  const selectedMemberIds = Array.isArray(triggeringSchedule?.selected_member_ids)
+    ? triggeringSchedule.selected_member_ids
+    : [];
 
   // Look up game name if game_id exists
   let gameName = 'Game TBD';
@@ -103,25 +130,39 @@ const promptWorker = new Worker('prompts', async (job) => {
     // If game not found (deleted), gameName stays 'Game TBD'
   }
 
+  // Deadline: prefer schedule's own override, then settings, then 72h default.
+  const effectiveDeadlineHours = triggeringSchedule?.default_deadline_hours
+    || settings.default_deadline_hours
+    || 72;
   const deadline = deadlineMinutes
     ? new Date(Date.now() + deadlineMinutes * 60 * 1000)
-    : calculateDeadline(settings.default_deadline_hours || 72);
+    : calculateDeadline(effectiveDeadlineHours);
 
-  // Create the prompt
+  const tokenExpiryHours = triggeringSchedule?.default_token_expiry_hours
+    || settings.default_token_expiry_hours
+    || 168;
+
+  // Create the prompt — week_identifier uses the per-schedule dedup key so
+  // multiple weekly schedules per group don't collide.
   const prompt = await AvailabilityPrompt.create({
     group_id: groupId,
     game_id: scheduleGameId,
     prompt_date: new Date(),
     deadline,
     status: 'pending',
-    week_identifier: weekIdentifier,
+    week_identifier: dedupKey,
     auto_schedule_enabled: true,
     blind_voting_enabled: settings.template_config?.blind_voting || false
   });
 
-  // Get active group members only (exclude pending/declined invites)
+  // Get active group members. If the schedule targets a specific subset of
+  // members (selected_member_ids), filter to those — otherwise email everyone.
+  const membershipWhere = { group_id: groupId, status: 'active' };
+  if (selectedMemberIds.length > 0) {
+    membershipWhere.user_id = selectedMemberIds;
+  }
   const memberships = await UserGroup.findAll({
-    where: { group_id: groupId, status: 'active' },
+    where: membershipWhere,
     include: [{
       model: User,
       required: true
@@ -137,11 +178,11 @@ const promptWorker = new Worker('prompts', async (job) => {
     if (!user.email || user.email.includes('@auth0')) continue;
 
     try {
-      // Generate magic token for this user
+      // Generate magic token for this user (per-schedule expiry override).
       const token = await magicTokenService.generateToken(
         { user_id: user.user_id, username: user.username },
         { id: prompt.id },
-        settings.default_token_expiry_hours
+        tokenExpiryHours
       );
       const availabilityUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/availability-form/${token}`;
 
