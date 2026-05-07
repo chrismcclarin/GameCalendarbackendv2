@@ -1,0 +1,212 @@
+// services/promptLifecycleService.js
+// Phase 71.2 / Plan 02 — Single source of truth for AvailabilityPrompt lifecycle
+// side-effects (consensus check + close-notification dispatch).
+//
+// Two functions:
+//   - checkConsensusAndClose(promptId): called after every response submit.
+//     If all active members responded, close the prompt and run the close
+//     side-effects.
+//   - handlePromptClosed(prompt): called after every status='closed' transition
+//     (PATCH-close, deadline, consensus). Resolves the recipient per the LOCKED
+//     rule (D-ADAPT-05 + D-SCHEMA-06), builds the top-slot list, sends the
+//     close-notification email. Best-effort — errors logged, never thrown.
+//
+// LOCKED recipient resolution rule (D-ADAPT-05 + D-SCHEMA-06):
+//   Manual:  recipient = User.findByPk(prompt.created_by_user_id)
+//   Auto:    settings = GroupPromptSettings.findByPk(prompt.created_by_settings_id)
+//            recipient = settings.created_by_user_id
+//              ? User.findByPk(settings.created_by_user_id)
+//              : <group owner via UserGroup role='owner' → User.user_id Auth0 sub>
+//
+// Note: the Group model has NO owner_id column in this codebase. Group ownership
+// is determined by `UserGroup.role === 'owner', status='active'`. UserGroup.user_id
+// is an Auth0 sub STRING, NOT a User.id UUID, so the owner-fallback path uses
+// User.findOne({ where: { user_id } }) NOT User.findByPk. See INVESTIGATION.md
+// step (d) for the full reasoning.
+//
+// D-ADAPT-03 invariant: this service NEVER writes to GroupPromptSettings —
+// closing an auto-prompt MUST NOT cancel the parent recurring schedule.
+
+const {
+  AvailabilityPrompt,
+  AvailabilityResponse,
+  AvailabilitySuggestion,
+  UserGroup,
+  Group,
+  GroupPromptSettings,
+  User,
+  Game,
+} = require('../models');
+const emailService = require('./emailService');
+
+/**
+ * Check whether all active group members have submitted responses for this
+ * prompt. Closes the prompt and dispatches the close-notification side-effects
+ * if so. Idempotent — safe to call from the response-submit handler on every
+ * submission. Best-effort — errors logged, never thrown.
+ *
+ * @param {string} promptId UUID
+ * @returns {Promise<{closed: boolean, respondedCount: number, totalActive: number, reason?: string}>}
+ */
+async function checkConsensusAndClose(promptId) {
+  try {
+    const prompt = await AvailabilityPrompt.findByPk(promptId);
+    if (!prompt) {
+      return { closed: false, respondedCount: 0, totalActive: 0, reason: 'not_found' };
+    }
+    if (prompt.status === 'closed' || prompt.status === 'converted') {
+      return { closed: false, respondedCount: 0, totalActive: 0, reason: 'already_closed' };
+    }
+
+    // Count distinct active group members and submitted responses.
+    const totalActive = await UserGroup.count({
+      where: { group_id: prompt.group_id, status: 'active' },
+    });
+    const respondedCount = await AvailabilityResponse.count({
+      where: { prompt_id: promptId, submitted_at: { [require('sequelize').Op.ne]: null } },
+    });
+
+    if (totalActive === 0 || respondedCount < totalActive) {
+      return { closed: false, respondedCount, totalActive };
+    }
+
+    // Consensus reached → close the prompt and run side-effects.
+    await prompt.update({ status: 'closed' });
+    await handlePromptClosed(prompt);
+    return { closed: true, respondedCount, totalActive };
+  } catch (err) {
+    console.error('[promptLifecycle] checkConsensusAndClose error:', err.message);
+    return { closed: false, respondedCount: 0, totalActive: 0, reason: 'error' };
+  }
+}
+
+/**
+ * Run the close-notification side-effects for a prompt that just transitioned
+ * to status='closed'. Called from PATCH-close, deadline expiry, and consensus
+ * close. Best-effort — errors logged, never thrown.
+ *
+ * Skips email send if:
+ *   - response count === 0 (D-CLOSE-03 silent close)
+ *   - top-slot list is empty (no viable suggestion to put in CTA)
+ *   - recipient cannot be resolved or has no email
+ *
+ * D-ADAPT-03: do NOT touch GroupPromptSettings — recurring schedule survives
+ * the close. Reading settings.created_by_user_id is a READ, not a write —
+ * explicitly distinct.
+ *
+ * @param {Object} prompt - AvailabilityPrompt model instance (post-close)
+ */
+async function handlePromptClosed(prompt) {
+  try {
+    if (!prompt) {
+      console.warn('[promptLifecycle] handlePromptClosed called with null prompt');
+      return;
+    }
+
+    // Step 1 — silent-close gate (D-CLOSE-03).
+    const responseCount = await AvailabilityResponse.count({
+      where: { prompt_id: prompt.id, submitted_at: { [require('sequelize').Op.ne]: null } },
+    });
+    if (responseCount === 0) {
+      // No responses → no top slot to suggest → no email.
+      return;
+    }
+
+    // Step 2 — resolve recipient per the LOCKED rule (D-ADAPT-05).
+    let recipient = null;
+    if (prompt.created_by_user_id) {
+      // Manual poll — recipient is the poll creator.
+      recipient = await User.findByPk(prompt.created_by_user_id);
+    } else if (prompt.created_by_settings_id) {
+      // Auto-prompt — recipient is the schedule creator, falling back to the
+      // group owner if the settings row is gone or has NULL created_by_user_id
+      // (legacy / pre-Plan-01 row).
+      // D-ADAPT-03: do NOT touch GroupPromptSettings — recurring schedule
+      // survives the close. Reading settings.created_by_user_id is read-only
+      // and allowed.
+      const settings = await GroupPromptSettings.findByPk(prompt.created_by_settings_id);
+      if (settings && settings.created_by_user_id) {
+        recipient = await User.findByPk(settings.created_by_user_id);
+      } else {
+        // Group-owner fallback — see INVESTIGATION.md step (d).
+        const ownerUg = await UserGroup.findOne({
+          where: { group_id: prompt.group_id, role: 'owner', status: 'active' },
+        });
+        if (ownerUg && ownerUg.user_id) {
+          // UserGroup.user_id is an Auth0 sub STRING, not a User.id UUID —
+          // look up by user_id, NOT findByPk.
+          recipient = await User.findOne({ where: { user_id: ownerUg.user_id } });
+        }
+      }
+    }
+
+    if (!recipient || !recipient.email) {
+      console.warn(`[promptLifecycle] no recipient resolved for prompt ${prompt.id}; skipping email`);
+      return;
+    }
+    if (recipient.email_notifications_enabled === false) {
+      console.log(`[promptLifecycle] recipient has email notifications disabled (prompt ${prompt.id}); skipping`);
+      return;
+    }
+
+    // Step 3 — load group + (optional) game for email body.
+    const group = await Group.findByPk(prompt.group_id);
+    if (!group) {
+      console.warn(`[promptLifecycle] group ${prompt.group_id} not found for prompt ${prompt.id}; skipping email`);
+      return;
+    }
+    let gameName = null;
+    if (prompt.game_id) {
+      const game = await Game.findByPk(prompt.game_id);
+      gameName = game ? game.name : null;
+    }
+
+    // Step 4 — build top-slot list (ties allowed).
+    const suggestions = await AvailabilitySuggestion.findAll({
+      where: { prompt_id: prompt.id, meets_minimum: true },
+      order: [['score', 'DESC'], ['suggested_start', 'ASC']],
+    });
+    if (!suggestions || suggestions.length === 0) {
+      // No viable slot — no CTA to send. Skip silently.
+      return;
+    }
+    const topScore = suggestions[0].score;
+    // Render all ties at the top score, sorted ascending by start time so the
+    // earliest tie is rendered first.
+    const topSlots = suggestions
+      .filter((s) => s.score === topScore)
+      .sort((a, b) => new Date(a.suggested_start) - new Date(b.suggested_start));
+
+    // Step 5 — build the email body and send.
+    const { html, text, subject } = emailService.generatePollClosedEmailTemplate({
+      recipientName: recipient.username || 'there',
+      groupName: group.name,
+      gameName,
+      topSlots,
+      scheduleItBaseUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/groupPlanning`,
+      promptId: prompt.id,
+      groupId: prompt.group_id,
+      timezone: recipient.timezone || 'UTC',
+    });
+
+    await emailService.send({
+      to: recipient.email,
+      subject,
+      html,
+      text,
+      groupName: group.name,
+      promptId: prompt.id,
+      // D-ADAPT-01: reuse the existing `availability_prompt` email channel —
+      // single mute knob covers all prompt-channel emails. NOT a new channel.
+      emailType: 'availability_prompt',
+    });
+  } catch (err) {
+    // Best-effort — close already committed. Log and swallow.
+    console.error('[promptLifecycle] handlePromptClosed error (non-fatal):', err.message);
+  }
+}
+
+module.exports = {
+  checkConsensusAndClose,
+  handlePromptClosed,
+};
