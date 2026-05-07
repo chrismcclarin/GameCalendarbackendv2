@@ -276,7 +276,14 @@ router.post('/prompts', verifyAuth0Token, async (req, res) => {
       deadline,
       auto_schedule_enabled,
       blind_voting_enabled,
-      week_identifier
+      week_identifier,
+      // Phase 71.2 / Plan 03 — manual-poll body widened to accept the
+      // optional fields the StartPollModal collects. Both columns already
+      // exist on AvailabilityPrompt (see models/AvailabilityPrompt.js).
+      // Without these reads the modal's custom_message + game_id would
+      // silently drop, defeating the form's purpose.
+      custom_message,
+      game_id
     } = req.body;
 
     if (!group_id) {
@@ -325,6 +332,11 @@ router.post('/prompts', verifyAuth0Token, async (req, res) => {
         week_identifier: week_identifier || null,
         auto_schedule_enabled: auto_schedule_enabled ?? true,
         blind_voting_enabled: blind_voting_enabled ?? false,
+        // Phase 71.2 / Plan 03 — optional manual-poll fields.
+        custom_message: typeof custom_message === 'string' && custom_message.trim()
+          ? custom_message.trim().slice(0, 280) // align with frontend 280-char limit
+          : null,
+        game_id: game_id || null,
         created_by_user_id: dbUser.id
       });
     } catch (err) {
