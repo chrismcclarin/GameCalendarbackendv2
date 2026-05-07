@@ -176,9 +176,15 @@ async function handlePromptClosed(prompt) {
       console.error(`[promptLifecycle] aggregateResponses failed for prompt ${prompt.id} (continuing): ${aggErr.message}`);
     }
 
-    // Step 4b — build top-slot list (ties allowed).
+    // Step 4b — build top-slot list (ties allowed). Don't filter on
+    // meets_minimum: true — that gate exists for the standard heatmap to hide
+    // un-hostable slots, but for the close-notification email we want the
+    // poll creator to see the best signal we have, even if the participant
+    // count is below the game's min_players. With 1 response in a 2-person
+    // group, every slot is "below minimum" but the creator still wants to
+    // know the top time their one respondent picked.
     const suggestions = await AvailabilitySuggestion.findAll({
-      where: { prompt_id: prompt.id, meets_minimum: true },
+      where: { prompt_id: prompt.id },
       order: [['score', 'DESC'], ['suggested_start', 'ASC']],
     });
     if (!suggestions || suggestions.length === 0) {
