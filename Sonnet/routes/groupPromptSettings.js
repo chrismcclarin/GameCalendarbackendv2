@@ -3,7 +3,24 @@ const express = require('express');
 const crypto = require('crypto');
 const { Group, User, UserGroup, GroupPromptSettings, Game } = require('../models');
 const { isOwnerOrAdmin, isActiveMember } = require('../services/authorizationService');
+const {
+  upsertSinglePromptScheduler,
+  removePromptScheduler
+} = require('../schedulers/promptScheduler');
 const router = express.Router();
+
+/**
+ * Best-effort BullMQ sync hook. Wraps a sync action so any Redis/BullMQ
+ * failure is logged but doesn't fail the HTTP response — the boot-time
+ * sync + reconcile pass will recover any missed registrations.
+ */
+async function syncToBullMQ(action, label) {
+  try {
+    await action();
+  } catch (err) {
+    console.error(`[groupPromptSettings] BullMQ sync failed (${label}):`, err.message);
+  }
+}
 
 // Helper function to generate template name from schedule data
 const generateTemplateName = async (scheduleData, game_id = null) => {
@@ -232,6 +249,16 @@ router.post('/:group_id/prompt-settings/schedules', async (req, res) => {
       }
     });
 
+    // Register the new schedule with BullMQ. Schedule is is_active=true on
+    // creation so we always upsert (skipped only if top-level settings.is_active
+    // is false, which means the group has paused prompts entirely).
+    if (settings.is_active !== false) {
+      await syncToBullMQ(
+        () => upsertSinglePromptScheduler(settings, newSchedule),
+        `POST schedule ${newSchedule.id}`
+      );
+    }
+
     res.status(201).json({
       message: 'Schedule created successfully',
       schedule: newSchedule
@@ -307,6 +334,22 @@ router.patch('/:group_id/prompt-settings/schedules/:schedule_id', async (req, re
       }
     });
 
+    // Re-register or unregister depending on the post-update state.
+    const stillActive = updatedSchedule.is_active !== false
+      && !updatedSchedule.deleted_at
+      && settings.is_active !== false;
+    if (stillActive) {
+      await syncToBullMQ(
+        () => upsertSinglePromptScheduler(settings, updatedSchedule),
+        `PATCH schedule ${schedule_id}`
+      );
+    } else {
+      await syncToBullMQ(
+        () => removePromptScheduler(settings.id, schedule_id),
+        `PATCH (deactivate) schedule ${schedule_id}`
+      );
+    }
+
     res.json({
       message: 'Schedule updated successfully',
       schedule: updatedSchedule
@@ -371,6 +414,14 @@ router.delete('/:group_id/prompt-settings/schedules/:schedule_id', async (req, r
         schedules: updatedSchedules
       }
     });
+
+    // Always remove from BullMQ on delete (soft or otherwise) — worker has
+    // an idempotent no-op for the race where a job fires after we've removed
+    // the scheduler but the schedule reappears via reconcile.
+    await syncToBullMQ(
+      () => removePromptScheduler(settings.id, schedule_id),
+      `DELETE schedule ${schedule_id}`
+    );
 
     res.json({
       message: 'Schedule deleted successfully'
@@ -440,6 +491,21 @@ router.patch('/:group_id/prompt-settings/schedules/:schedule_id/toggle', async (
         schedules: updatedSchedules
       }
     });
+
+    // Toggle: branch on the new is_active state.
+    const toggled = updatedSchedules[scheduleIndex];
+    const nowActive = toggled.is_active === true && settings.is_active !== false;
+    if (nowActive) {
+      await syncToBullMQ(
+        () => upsertSinglePromptScheduler(settings, toggled),
+        `TOGGLE-on schedule ${schedule_id}`
+      );
+    } else {
+      await syncToBullMQ(
+        () => removePromptScheduler(settings.id, schedule_id),
+        `TOGGLE-off schedule ${schedule_id}`
+      );
+    }
 
     res.json({
       message: `Schedule ${!currentActive ? 'activated' : 'paused'} successfully`,
