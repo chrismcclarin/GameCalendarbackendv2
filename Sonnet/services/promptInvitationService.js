@@ -96,13 +96,18 @@ async function notifyMembersOfPrompt(prompt, { selectedMemberIds, tokenExpiryHou
     include: [{ model: User, required: true }],
   });
 
-  const deadlineStr = prompt.deadline
-    ? new Date(prompt.deadline).toLocaleString('en-US', {
-        weekday: 'short', month: 'short', day: 'numeric',
-        hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
-      })
-    : 'soon';
   const weekDescription = prompt.week_identifier || 'this week';
+
+  // Per-recipient deadline format — applied inside the loop so each user sees
+  // the deadline in their own profile timezone (Plan 03 hotfix).
+  const formatDeadlineForUser = (userTz) => {
+    if (!prompt.deadline) return 'soon';
+    return new Date(prompt.deadline).toLocaleString('en-US', {
+      timeZone: userTz || 'UTC',
+      weekday: 'short', month: 'short', day: 'numeric',
+      hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+    });
+  };
 
   let sent = 0;
   let failed = 0;
@@ -110,6 +115,7 @@ async function notifyMembersOfPrompt(prompt, { selectedMemberIds, tokenExpiryHou
     const user = membership.User;
     if (!user || !user.email || user.email.includes('@auth0')) continue;
     if (user.email_notifications_enabled === false) continue;
+    const deadlineStr = formatDeadlineForUser(user.timezone);
 
     try {
       const token = await magicTokenService.generateToken(

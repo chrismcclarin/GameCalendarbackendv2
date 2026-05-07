@@ -6,6 +6,7 @@ const router = express.Router();
 const { validateToken } = require('../services/magicTokenService');
 const { magicTokenLimiter } = require('../middleware/rateLimiter');
 const { trackValidation, extractTokenId } = require('../services/tokenAnalyticsService');
+const { User } = require('../models');
 
 /**
  * POST /api/magic-auth/validate
@@ -56,11 +57,29 @@ router.post('/validate', magicTokenLimiter, async (req, res) => {
       graceUsed: result.graceUsed || false
     });
 
+    // Phase 71.2 / Plan 03 hotfix — include the user's profile TZ so the
+    // availability form renders slot labels in the user's saved timezone
+    // (Denver, NY, etc.) instead of falling back to the browser's detected
+    // timezone, which is wrong when the browser is on a different machine
+    // than where the user normally games.
+    let profileTimezone = null;
+    try {
+      const dbUser = await User.findOne({
+        where: { user_id: result.decoded.sub },
+        attributes: ['timezone'],
+      });
+      profileTimezone = dbUser?.timezone || null;
+    } catch (tzErr) {
+      // Non-fatal — frontend falls back to browser TZ if profileTimezone is null.
+      console.error('[magic-auth] failed to look up profile TZ:', tzErr.message);
+    }
+
     // Success response with info needed by frontend
     res.json({
       valid: true,
       user: {
-        name: result.decoded.name  // For "Submitting as [Name]" UI
+        name: result.decoded.name,  // For "Submitting as [Name]" UI
+        timezone: profileTimezone,
       },
       prompt_id: result.decoded.prompt_id,
       expiresAt: result.tokenRecord.expires_at,
