@@ -214,6 +214,128 @@ describe('Poll Routes (POLL-01)', () => {
         .expect(403);
     });
 
+    it('does NOT premature-close with reason=consensus when only some active members responded (D-POLL-CREATE-05, Bug 2 round 2)', async () => {
+      // Add a third active member so the group has 3 active full members.
+      // This pins the regression: previously the consensus check could fire
+      // after a single response if the count denominator was wrong.
+      const thirdMember = { user_id: 'auth0|poll-third', email: 'third@example.com', username: 'third' };
+      await User.create(thirdMember);
+      await UserGroup.create({
+        user_id: thirdMember.user_id,
+        group_id: group.id,
+        status: 'active',
+        role: 'member',
+      });
+
+      const ownerApp = makeApp(owner.user_id);
+      const create = await request(ownerApp)
+        .post('/api/polls')
+        .send({
+          group_id: group.id,
+          date_window_start: '2030-06-01',
+          date_window_end: '2030-06-07',
+          response_deadline: '2030-05-31T18:00:00.000Z',
+        })
+        .expect(201);
+      const pollId = create.body.id;
+
+      // Owner responds (1/3) — must STAY open
+      await request(ownerApp)
+        .post(`/api/polls/${pollId}/responses`)
+        .send({ slot_data: [{ date: '2030-06-01', slot: '2030-06-01T19:00:00.000Z', available: true }] })
+        .expect(200);
+      // Wait for any auto-close fan-out in flight
+      await new Promise(r => setTimeout(r, 100));
+      let p = await Poll.findByPk(pollId);
+      expect(p.status).toBe('open');
+
+      // Member responds (2/3) — must STAY open
+      const memberApp = makeApp(member.user_id);
+      await request(memberApp)
+        .post(`/api/polls/${pollId}/responses`)
+        .send({ slot_data: [{ date: '2030-06-01', slot: '2030-06-01T19:00:00.000Z', available: true }] })
+        .expect(200);
+      await new Promise(r => setTimeout(r, 100));
+      p = await Poll.findByPk(pollId);
+      expect(p.status).toBe('open');
+
+      // Third member responds (3/3) — NOW close consensus
+      const thirdApp = makeApp(thirdMember.user_id);
+      await request(thirdApp)
+        .post(`/api/polls/${pollId}/responses`)
+        .send({ slot_data: [{ date: '2030-06-01', slot: '2030-06-01T19:00:00.000Z', available: true }] })
+        .expect(200);
+
+      // Poll close fan-out is async — poll briefly.
+      let final;
+      for (let i = 0; i < 20; i++) {
+        final = await Poll.findByPk(pollId);
+        if (final.status === 'closed') break;
+        await new Promise(r => setTimeout(r, 50));
+      }
+      expect(final.status).toBe('closed');
+      expect(final.close_reason).toBe('consensus');
+
+      // Cleanup the third member so subsequent tests aren't polluted.
+      await UserGroup.destroy({ where: { user_id: thirdMember.user_id } });
+      await User.destroy({ where: { user_id: thirdMember.user_id } });
+    });
+
+    it('does NOT count role=pending (game-only) members in the consensus denominator (D-POLL-CREATE-05, Bug 2 round 2)', async () => {
+      // Add a game-only participant (Phase 71.1 pattern: status='active' but
+      // role='pending'). Group now has 2 full active members + 1 pending —
+      // consensus must still fire at 2 responses, not 3.
+      const pendingMember = { user_id: 'auth0|poll-pending', email: 'pending@example.com', username: 'pending' };
+      await User.create(pendingMember);
+      await UserGroup.create({
+        user_id: pendingMember.user_id,
+        group_id: group.id,
+        status: 'active',
+        role: 'pending',
+      });
+
+      const ownerApp = makeApp(owner.user_id);
+      const create = await request(ownerApp)
+        .post('/api/polls')
+        .send({
+          group_id: group.id,
+          date_window_start: '2030-06-01',
+          date_window_end: '2030-06-07',
+          response_deadline: '2030-05-31T18:00:00.000Z',
+        })
+        .expect(201);
+      const pollId = create.body.id;
+
+      // Owner responds (1 full / 2 full) — must STAY open
+      await request(ownerApp)
+        .post(`/api/polls/${pollId}/responses`)
+        .send({ slot_data: [{ date: '2030-06-01', slot: '2030-06-01T19:00:00.000Z', available: true }] })
+        .expect(200);
+      await new Promise(r => setTimeout(r, 100));
+      let p = await Poll.findByPk(pollId);
+      expect(p.status).toBe('open');
+
+      // Member responds (2 full / 2 full) — pending member doesn't gate consensus
+      const memberApp = makeApp(member.user_id);
+      await request(memberApp)
+        .post(`/api/polls/${pollId}/responses`)
+        .send({ slot_data: [{ date: '2030-06-01', slot: '2030-06-01T19:00:00.000Z', available: true }] })
+        .expect(200);
+
+      let final;
+      for (let i = 0; i < 20; i++) {
+        final = await Poll.findByPk(pollId);
+        if (final.status === 'closed') break;
+        await new Promise(r => setTimeout(r, 50));
+      }
+      expect(final.status).toBe('closed');
+      expect(final.close_reason).toBe('consensus');
+
+      // Cleanup
+      await UserGroup.destroy({ where: { user_id: pendingMember.user_id } });
+      await User.destroy({ where: { user_id: pendingMember.user_id } });
+    });
+
     it('auto-closes with reason=consensus once 100% of active members respond (D-POLL-CREATE-04/05)', async () => {
       const ownerApp = makeApp(owner.user_id);
       const create = await request(ownerApp)

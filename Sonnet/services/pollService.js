@@ -216,13 +216,37 @@ async function checkAutoClose(pollId) {
     return closePoll({ pollId, reason: 'deadline' });
   }
 
-  // Consensus path — 100% of active members responded
+  // Consensus path — 100% of FULL active members responded.
+  //
+  // D-POLL-CREATE-05 specifies "100% of all active group members". In Phase 71.1
+  // we introduced role='pending' UserGroup rows for game-only participants —
+  // authenticated users invited to a single game event without joining the
+  // group proper. Those rows have status='active' (so they can RSVP to the
+  // game they were invited to) but they MUST NOT be required to respond to a
+  // group-wide availability poll. Excluding role='pending' here matches the
+  // project's "active member" vocabulary across the rest of the codebase.
+  //
+  // Plan 71-05 manual-checkpoint Bug 2 (round 2) fix: previously the count
+  // included role='pending' rows, which caused premature consensus close when
+  // the only "members" beyond the responder were game-only invitees who never
+  // intended to respond to the poll.
   const activeCount = await UserGroup.count({
-    where: { group_id: poll.group_id, status: 'active' },
+    where: {
+      group_id: poll.group_id,
+      status: 'active',
+      role: { [Op.in]: ['member', 'admin', 'owner'] },
+    },
   });
   const responseCount = await PollResponse.count({ where: { poll_id: pollId } });
 
   if (activeCount > 0 && responseCount >= activeCount) {
+    // Diagnostic — keep this. If this fires unexpectedly, the log lets us see
+    // the exact denominator the service observed at close time.
+    console.log(
+      `[pollService] consensus close: poll=${pollId} ` +
+      `responseCount=${responseCount} activeCount=${activeCount} ` +
+      `(group=${poll.group_id})`
+    );
     return closePoll({ pollId, reason: 'consensus' });
   }
 
