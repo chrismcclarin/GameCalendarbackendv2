@@ -16,14 +16,32 @@
  */
 module.exports = {
   async up(queryInterface, Sequelize) {
+    // Idempotency guard so the standalone runner is safe to re-run (matches
+    // the pattern used by the rest of the v1.10 migrations).
+    const tableDesc = await queryInterface.describeTable('AvailabilityResponses').catch(() => null);
+    if (tableDesc && tableDesc.reminder_count) {
+      console.log('AvailabilityResponses.reminder_count already exists, skipping addColumn.');
+      return;
+    }
     await queryInterface.addColumn('AvailabilityResponses', 'reminder_count', {
       type: Sequelize.INTEGER,
       allowNull: true,
       defaultValue: 0,
     });
+    console.log('Added AvailabilityResponses.reminder_count column.');
   },
 
   async down(queryInterface) {
     await queryInterface.removeColumn('AvailabilityResponses', 'reminder_count');
   },
 };
+
+// Standalone runner — mirrors the pattern from commit b3b568c (allow direct
+// invocation via `railway run node migrations/<file>.js`).
+if (require.main === module) {
+  const sequelize = require('../config/database');
+  const { Sequelize } = require('sequelize');
+  module.exports.up(sequelize.getQueryInterface(), Sequelize)
+    .then(() => { return sequelize.close(); })
+    .catch(err => { console.error(err); process.exit(1); });
+}
