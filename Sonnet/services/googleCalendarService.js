@@ -359,140 +359,43 @@ class GoogleCalendarService {
 
       // Extract busy periods
       const busyPeriods = freebusyResponse.data.calendars?.primary?.busy || [];
-      
-      // Convert busy periods to 30-minute time slots
-      // Google Calendar returns busy periods as ISO strings (RFC3339 format)
-      // These are always in UTC, so we need to properly convert to the user's timezone
+
+      // Convert busy periods to 30-minute time slots keyed in UTC.
+      //
+      // IMPORTANT: keys MUST be in UTC to align with availabilityService.generateTimeSlots,
+      // which produces the slot grid via toISOString() (UTC). The previous implementation
+      // emitted local-timezone keys, so for any non-UTC user the busyKeys lookup in
+      // availabilityService.calculateUserAvailability never matched -- every slot fell
+      // through to the "free" branch and the heatmap rendered fully available regardless
+      // of the user's actual calendar.
       const busySlots = [];
-      
+      const SLOT_MS = 30 * 60 * 1000;
+      const MAX_SLOTS_PER_PERIOD = 10000; // Safety limit
+
       for (const period of busyPeriods) {
-        // Parse the ISO string dates from Google Calendar (these are in UTC)
         const periodStartUTC = new Date(period.start);
         const periodEndUTC = new Date(period.end);
-        
-        // Get time components in the target timezone for rounding
-        const startFormatter = new Intl.DateTimeFormat('en-US', {
-          timeZone: timezone,
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit',
-          hour12: false,
-        });
-        
-        // Get the local time representation in the target timezone
-        // We'll use this to determine what time it "appears" to be in that timezone
-        const startParts = startFormatter.formatToParts(periodStartUTC);
-        const startYear = parseInt(startParts.find(p => p.type === 'year').value);
-        const startMonth = parseInt(startParts.find(p => p.type === 'month').value) - 1; // Month is 0-indexed
-        const startDay = parseInt(startParts.find(p => p.type === 'day').value);
-        const startHour = parseInt(startParts.find(p => p.type === 'hour').value);
-        const startMinute = parseInt(startParts.find(p => p.type === 'minute').value);
-        
-        const endParts = startFormatter.formatToParts(periodEndUTC);
-        const endYear = parseInt(endParts.find(p => p.type === 'year').value);
-        const endMonth = parseInt(endParts.find(p => p.type === 'month').value) - 1;
-        const endDay = parseInt(endParts.find(p => p.type === 'day').value);
-        const endHour = parseInt(endParts.find(p => p.type === 'hour').value);
-        const endMinute = parseInt(endParts.find(p => p.type === 'minute').value);
-        
-        // Round start time down to nearest 30 minutes in the target timezone
-        const roundedStartMinute = Math.floor(startMinute / 30) * 30;
-        let slotStartHour = startHour;
-        let slotStartMinute = roundedStartMinute;
-        let slotStartYear = startYear;
-        let slotStartMonth = startMonth;
-        let slotStartDay = startDay;
-        
-        // Round end time up to nearest 30 minutes in the target timezone
-        const roundedEndMinute = Math.ceil(endMinute / 30) * 30;
-        let slotEndHour = endHour;
-        let slotEndMinute = roundedEndMinute;
-        let slotEndYear = endYear;
-        let slotEndMonth = endMonth;
-        let slotEndDay = endDay;
-        
-        if (roundedEndMinute === 60) {
-          slotEndHour = (slotEndHour + 1) % 24;
-          slotEndMinute = 0;
-          if (slotEndHour === 0) {
-            // Roll over to next day
-            const daysInMonth = new Date(slotEndYear, slotEndMonth + 1, 0).getDate();
-            slotEndDay++;
-            if (slotEndDay > daysInMonth) {
-              slotEndDay = 1;
-              slotEndMonth++;
-              if (slotEndMonth > 11) {
-                slotEndMonth = 0;
-                slotEndYear++;
-              }
-            }
-          }
-        }
-        
-        // Generate 30-minute slots in the target timezone
-        // We'll iterate using the timezone-aware components
-        let currentYear = slotStartYear;
-        let currentMonth = slotStartMonth;
-        let currentDay = slotStartDay;
-        let currentHour = slotStartHour;
-        let currentMinute = slotStartMinute;
-        
-        const maxSlots = 10000; // Safety limit
+
+        // Round start down and end up to the nearest 30-min UTC boundary so the
+        // resulting slots align with the slot grid in generateTimeSlots.
+        const slotStartMs = Math.floor(periodStartUTC.getTime() / SLOT_MS) * SLOT_MS;
+        const slotEndMs = Math.ceil(periodEndUTC.getTime() / SLOT_MS) * SLOT_MS;
+
         let slotCount = 0;
-        
-        while (
-          currentYear < slotEndYear ||
-          (currentYear === slotEndYear && currentMonth < slotEndMonth) ||
-          (currentYear === slotEndYear && currentMonth === slotEndMonth && currentDay < slotEndDay) ||
-          (currentYear === slotEndYear && currentMonth === slotEndMonth && currentDay === slotEndDay && 
-           (currentHour < slotEndHour || (currentHour === slotEndHour && currentMinute < slotEndMinute)))
-        ) {
-          // Safety check
-          if (slotCount++ > maxSlots) {
-            console.error('Safety limit reached in getBusyTimesForDateRange. Stopping to prevent infinite loop.');
+        for (let ms = slotStartMs; ms < slotEndMs; ms += SLOT_MS) {
+          if (slotCount++ > MAX_SLOTS_PER_PERIOD) {
+            console.error('Safety limit reached in getBusyTimesForDateRange. Stopping to prevent runaway loop.');
             break;
           }
-          
-          // Format current slot in the target timezone
-          const dateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(currentDay).padStart(2, '0')}`;
-          const startTimeStr = `${String(currentHour).padStart(2, '0')}:${String(currentMinute).padStart(2, '0')}`;
-          
-          // Calculate next slot (30 minutes later)
-          let nextHour = currentHour;
-          let nextMinute = currentMinute + 30;
-          const didHourWrap = nextMinute >= 60;
-          if (didHourWrap) {
-            nextMinute = nextMinute - 60;
-            nextHour = (nextHour + 1) % 24;
-          }
-          const endTimeStr = `${String(nextHour).padStart(2, '0')}:${String(nextMinute).padStart(2, '0')}`;
-          
-          busySlots.push({
-            date: dateStr,
-            startTime: startTimeStr,
-            endTime: endTimeStr,
-          });
-          
-          // Handle day/month/year rollover when hour wraps from 23 to 0 (midnight crossover)
-          if (didHourWrap && nextHour === 0) {
-            // Day has rolled over (we went from 23:xx to 0:xx)
-            const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
-            currentDay++;
-            if (currentDay > daysInMonth) {
-              currentDay = 1;
-              currentMonth++;
-              if (currentMonth > 11) {
-                currentMonth = 0;
-                currentYear++;
-              }
-            }
-          }
-          
-          // Advance to next slot
-          currentHour = nextHour;
-          currentMinute = nextMinute;
+
+          const start = new Date(ms);
+          const end = new Date(ms + SLOT_MS);
+
+          const date = `${start.getUTCFullYear()}-${String(start.getUTCMonth() + 1).padStart(2, '0')}-${String(start.getUTCDate()).padStart(2, '0')}`;
+          const startTime = `${String(start.getUTCHours()).padStart(2, '0')}:${String(start.getUTCMinutes()).padStart(2, '0')}`;
+          const endTime = `${String(end.getUTCHours()).padStart(2, '0')}:${String(end.getUTCMinutes()).padStart(2, '0')}`;
+
+          busySlots.push({ date, startTime, endTime });
         }
       }
 
