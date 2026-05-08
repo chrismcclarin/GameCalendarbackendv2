@@ -404,7 +404,11 @@ router.get('/group/:group_id/heatmap',
         return res.status(400).json({ error: 'week_start must be a Monday' });
       }
 
-      // Validate week_start is within allowed range (2 weeks past, 4 weeks future from current Monday)
+      // Validate week_start is within allowed range (-3 weeks past, +12 weeks future
+      // from current Monday). Phase 72-03 HUX-04 widened the range from the legacy
+      // -2/+4 to match the CONTEXT-locked -3/+12 frontend navigation bounds — keep
+      // these in sync with periodictabletop's heatmap nav (createEvent / MergedHeatmap
+      // / HeatmapGrid all use -3/+12).
       const now = new Date();
       const currentDayOfWeek = now.getUTCDay();
       const diffToMonday = currentDayOfWeek === 0 ? -6 : 1 - currentDayOfWeek;
@@ -413,11 +417,11 @@ router.get('/group/:group_id/heatmap',
       const diffMs = weekStartDate.getTime() - currentMonday.getTime();
       const diffWeeks = diffMs / (7 * 24 * 60 * 60 * 1000);
 
-      if (diffWeeks < -2) {
-        return res.status(400).json({ error: 'week_start cannot be more than 2 weeks in the past' });
+      if (diffWeeks < -3) {
+        return res.status(400).json({ error: 'week_start cannot be more than 3 weeks in the past' });
       }
-      if (diffWeeks > 4) {
-        return res.status(400).json({ error: 'week_start cannot be more than 4 weeks in the future' });
+      if (diffWeeks > 12) {
+        return res.status(400).json({ error: 'week_start cannot be more than 12 weeks in the future' });
       }
 
       const weekStartStr = weekStartDate.toISOString().split('T')[0];
