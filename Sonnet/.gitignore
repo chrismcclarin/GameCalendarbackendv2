@@ -3,7 +3,7 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-package-lock.json
+# package-lock.json is now committed (Phase 74-03) so CI `npm ci` can resolve a deterministic dep tree.
 
 # Environment variables - CRITICAL: Never commit these!
 .env
