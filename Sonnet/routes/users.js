@@ -622,11 +622,16 @@ router.post('/:user_id/phone/verify', async (req, res) => {
   }
 });
 
-// Remove phone number (D-PHONE-02 cascade): clear phone, phone_verified,
-// sms_enabled, and all 4 notification_preferences[type].sms toggles in ONE
-// atomic Sequelize transaction. If any field write fails, the user record is
-// rolled back to its prior state — never half-cleared. Returns the updated
-// user so the frontend can refresh local state without a second fetch.
+// Remove phone number (D-PHONE-02 cascade): clear phone, phone_verified, and
+// all 4 notification_preferences[type].sms toggles in ONE atomic Sequelize
+// transaction. If any field write fails, the user record is rolled back to
+// its prior state — never half-cleared. Returns the updated user so the
+// frontend can refresh local state without a second fetch.
+//
+// NOTE: sms_enabled is intentionally NOT touched here. It's an admin-controlled
+// entitlement flag — only the admin flips it via direct DB access. Phone
+// removal does not revoke entitlement; the user can re-add a phone later and
+// pick up where they left off without admin intervention.
 router.delete('/:user_id/phone', async (req, res) => {
   try {
     const userId = req.user?.user_id;
@@ -671,7 +676,6 @@ router.delete('/:user_id/phone', async (req, res) => {
         {
           phone: null,
           phone_verified: false,
-          sms_enabled: false,
           notification_preferences: clearedPrefs,
         },
         { transaction: t }
