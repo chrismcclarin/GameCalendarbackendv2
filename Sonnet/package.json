@@ -20,6 +20,7 @@
         "db:migrate:email-metrics": "node migrations/20260218000001-create-email-metrics.js",
         "db:migrate:add-source-type": "node migrations/20260221000001-add-source-type-to-email-metrics.js",
         "db:migrate:feedback": "node migrations/20260226000001-create-feedback-table.js",
+        "audit:migrations": "node scripts/audit-migrations.js",
         "audit:tz": "node scripts/audit-event-timezones.js"
     },
     "dependencies": {
