@@ -2,10 +2,69 @@
 // RSVP CRUD API endpoints for event responses (yes/no/maybe)
 const express = require('express');
 const crypto = require('crypto');
-const { EventRsvp, EventBring, Event, User, Game, Group } = require('../models');
+const { EventRsvp, EventBring, Event, User, Game, Group, EventParticipation } = require('../models');
 const { validateRsvpCreate } = require('../middleware/validators');
 const { verifyAuth0Token } = require('../middleware/auth0');
+const { enqueueCleanupJobForAttendee } = require('../services/gcalCleanupService');
 const router = express.Router();
+
+// ============================================
+// Phase 75 / GCAL-01: per-attendee GCal cleanup dispatch
+// ============================================
+
+/**
+ * Dispatch a GCal cleanup job for the user-event pair IF this represents a
+ * transition that leaves a ghost on the user's calendar.
+ *
+ * Triggering condition (per CONTEXT D-RSVP-CHANGE + post-verification update):
+ *   - oldStatus='yes' AND newStatus='no'   (yes->no transition)
+ *   - DELETE-of-yes synthesizes newStatus='no' so the same gate applies
+ *
+ * Only fires if the user has a stored google_calendar_event_id on their
+ * EventParticipation row. Best-effort + non-blocking — caller's RSVP
+ * write/delete is never affected.
+ *
+ * @param {Object} params
+ * @param {string} params.eventId
+ * @param {string} params.authUserId  Auth0 user_id string (from token or magic-link payload)
+ * @param {string|null} params.oldStatus   'yes' | 'no' | 'maybe' | null
+ * @param {string} params.newStatus   'yes' | 'no' | 'maybe'
+ */
+async function maybeDispatchGcalCleanup({ eventId, authUserId, oldStatus, newStatus }) {
+  // Strict transition gate: only yes->no per CONTEXT D-RSVP-CHANGE.
+  // (DELETE-of-yes callers synthesize newStatus='no' to flow through this same gate.)
+  if (oldStatus !== 'yes' || newStatus !== 'no') return;
+  try {
+    // Translate Auth0 string user_id -> User.id (UUID) for EventParticipation lookup.
+    // EventRsvp.user_id is the Auth0 sub; EventParticipation.user_id is the User UUID.
+    const user = await User.findOne({
+      where: { user_id: authUserId },
+      attributes: ['id'],
+    });
+    if (!user) return;
+
+    const participation = await EventParticipation.findOne({
+      where: { event_id: eventId, user_id: user.id },
+      attributes: ['id', 'google_calendar_event_id'],
+    });
+    if (!participation || !participation.google_calendar_event_id) {
+      // No GCal entry to clean up — silent skip per CONTEXT D-FAILURE.
+      return;
+    }
+
+    await enqueueCleanupJobForAttendee({
+      eventId,
+      eventParticipationId: participation.id,
+      userId: user.id,
+      googleCalendarEventId: participation.google_calendar_event_id,
+    });
+  } catch (err) {
+    // Best-effort + non-blocking — never let a cleanup-dispatch issue
+    // affect the caller. The service itself is already best-effort, but
+    // wrap defensively in case findOne throws or the require failed.
+    console.error('[rsvp:maybeDispatchGcalCleanup] dispatch failed (non-fatal):', err.message);
+  }
+}
 
 // ============================================
 // HMAC-based RSVP Token Utilities
@@ -100,6 +159,9 @@ router.get('/respond', async (req, res) => {
     const existing = await EventRsvp.findOne({
       where: { event_id: eventId, user_id: userId },
     });
+    // Phase 75 / GCAL-01: capture old status BEFORE the update so we can
+    // detect yes->no transitions (the only case that triggers GCal cleanup).
+    const oldStatus = existing ? existing.status : null;
 
     if (existing) {
       await existing.update({ status });
@@ -110,6 +172,17 @@ router.get('/respond', async (req, res) => {
         status,
       });
     }
+
+    // Phase 75 / GCAL-01: yes -> no triggers GCal cleanup for this attendee.
+    // Fire-and-forget; never blocks the RSVP response.
+    maybeDispatchGcalCleanup({
+      eventId,
+      authUserId: userId,
+      oldStatus,
+      newStatus: status,
+    }).catch((err) =>
+      console.error('[rsvp:GET /respond] GCal cleanup dispatch error (non-fatal):', err.message)
+    );
 
     // Format event date for display
     const formattedDate = eventDate.toLocaleDateString('en-US', {
@@ -170,6 +243,9 @@ router.post('/', verifyAuth0Token, validateRsvpCreate, async (req, res) => {
 
     let rsvp;
     let isCreate = false;
+    // Phase 75 / GCAL-01: capture old status BEFORE the update so we can
+    // detect yes->no transitions (the only case that triggers GCal cleanup).
+    const oldStatus = existing ? existing.status : null;
 
     if (existing) {
       // Update existing RSVP
@@ -190,6 +266,17 @@ router.post('/', verifyAuth0Token, validateRsvpCreate, async (req, res) => {
     if (status === 'no' || status === 'maybe') {
       await EventBring.destroy({ where: { event_id, user_id: userId } });
     }
+
+    // Phase 75 / GCAL-01: yes -> no triggers GCal cleanup for this attendee.
+    // Fire-and-forget; never blocks the RSVP response.
+    maybeDispatchGcalCleanup({
+      eventId: event_id,
+      authUserId: userId,
+      oldStatus,
+      newStatus: status,
+    }).catch((err) =>
+      console.error('[rsvp:POST] GCal cleanup dispatch error (non-fatal):', err.message)
+    );
 
     // Re-fetch with User include for response
     const result = await EventRsvp.findByPk(rsvp.id, {
