@@ -38,6 +38,10 @@ const EventParticipation = sequelize.define('EventParticipation', {
     defaultValue: false,
     allowNull: false,
   },
+  google_calendar_event_id: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
 }, {
   timestamps: true,
   indexes: [
