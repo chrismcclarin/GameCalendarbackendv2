@@ -558,10 +558,27 @@ router.post('/', validateEventCreate, async (req, res) => {
           
           // Create calendar events for participants with Google Calendar connected
           // This will silently fail if no users have tokens, which is expected
-          await googleCalendarService.createCalendarEventsForGroup(
+          const calendarResults = await googleCalendarService.createCalendarEventsForGroup(
             eventDataForCalendar,
             participantMembers
           );
+
+          // Phase 75 / GCAL-01 (Plan 75-01): persist the GCal event id on
+          // every connected attendee's EventParticipation row so the cleanup
+          // worker (Plan 75-03) can find what to remove on cancel/delete/
+          // RSVP-no. The same GCal event id is shared across host + invitee
+          // calendars (Google's invitation propagation), so each user's own
+          // token + this id identifies the event on their primary calendar.
+          if (calendarResults.length > 0 && calendarResults[0].gcal_event_id) {
+            const gcalEventId = calendarResults[0].gcal_event_id;
+            const connectedUserUuids = calendarResults[0].connected_member_ids || [];
+            if (connectedUserUuids.length > 0) {
+              await EventParticipation.update(
+                { google_calendar_event_id: gcalEventId },
+                { where: { event_id: completeEvent.id, user_id: connectedUserUuids } }
+              );
+            }
+          }
         } catch (calendarError) {
           // Log error but don't fail the event creation
           if (process.env.NODE_ENV === 'development') {

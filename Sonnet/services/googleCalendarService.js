@@ -298,10 +298,18 @@ class GoogleCalendarService {
         delete calendarEvent._new_access_token; // Remove from response
       }
       
-      results.push({ 
-        member_id: firstMemberWithCalendar.id, 
+      results.push({
+        member_id: firstMemberWithCalendar.id,
         calendar_event: calendarEvent,
-        invitations_sent_to: participantEmails // Track who received invitations
+        invitations_sent_to: participantEmails, // Track who received invitations
+        // Phase 75 / GCAL-01 (Plan 75-01): expose enough info for the route
+        // handler to persist google_calendar_event_id on every connected
+        // attendee's EventParticipation row. Google's invitation propagation
+        // shares the SAME event id across host + invitee calendars, so the
+        // cleanup worker (Plan 75-03) can call events.delete against each
+        // user's primary calendar using THEIR token + this same id.
+        connected_member_ids: membersWithCalendar.map(m => m.id),
+        gcal_event_id: calendarEvent.id,
       });
       console.log(`Calendar event created and invitations sent to ${participantEmails.length} participants`);
     } catch (error) {
