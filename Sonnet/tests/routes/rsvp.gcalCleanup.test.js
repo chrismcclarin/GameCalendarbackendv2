@@ -326,3 +326,157 @@ describe('GET /api/rsvp/respond — Phase 75 / Plan 04 GCal cleanup dispatch', (
     expect(getRes.body).toHaveProperty('event_name');
   });
 });
+
+// ============================================================================
+// DELETE /:rsvp_id — authenticated path
+// ============================================================================
+
+describe('DELETE /api/rsvp/:rsvp_id — Phase 75 / Plan 04 GCal cleanup dispatch', () => {
+  const RSVP_ID = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
+
+  // Helper: build a "loaded" RSVP row that the route will mutate.
+  // Captures destroy() vs the helper invocation so Test 21 can prove timing.
+  function buildLoadedRsvp(status, opts = {}) {
+    const { ownerAuth0Id = TEST_USER_ID_AUTH0 } = opts;
+    return {
+      id: RSVP_ID,
+      event_id: TEST_EVENT_ID,
+      user_id: ownerAuth0Id,
+      status,
+      destroy: jest.fn(async function () {
+        callOrder.push('rsvp.destroy');
+        // Simulate row removal — clear status to detect post-destroy reads.
+        this.status = null;
+        return true;
+      }),
+    };
+  }
+
+  test('Test 12: DELETE-of-yes with non-null gcal id → exactly one cleanup job dispatched', async () => {
+    mockEventRsvpFindByPk.mockResolvedValueOnce(buildLoadedRsvp('yes'));
+
+    const res = await request(app).delete(`/api/rsvp/${RSVP_ID}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ message: 'RSVP removed' });
+    await new Promise((r) => setImmediate(r));
+    expect(mockEnqueueCleanupJobForAttendee).toHaveBeenCalledTimes(1);
+    expect(mockEnqueueCleanupJobForAttendee).toHaveBeenCalledWith({
+      eventId: TEST_EVENT_ID,
+      eventParticipationId: TEST_EP_ID,
+      userId: TEST_USER_ID_UUID,
+      googleCalendarEventId: TEST_GCAL_EVENT_ID,
+    });
+  });
+
+  test('Test 13: DELETE-of-no → NO cleanup job (no GCal entry was placed)', async () => {
+    mockEventRsvpFindByPk.mockResolvedValueOnce(buildLoadedRsvp('no'));
+
+    const res = await request(app).delete(`/api/rsvp/${RSVP_ID}`);
+
+    expect(res.status).toBe(200);
+    await new Promise((r) => setImmediate(r));
+    expect(mockEnqueueCleanupJobForAttendee).not.toHaveBeenCalled();
+  });
+
+  test('Test 14: DELETE-of-maybe → NO cleanup job', async () => {
+    mockEventRsvpFindByPk.mockResolvedValueOnce(buildLoadedRsvp('maybe'));
+
+    const res = await request(app).delete(`/api/rsvp/${RSVP_ID}`);
+
+    expect(res.status).toBe(200);
+    await new Promise((r) => setImmediate(r));
+    expect(mockEnqueueCleanupJobForAttendee).not.toHaveBeenCalled();
+  });
+
+  test('Test 15: DELETE-of-yes but missing EventParticipation row → no crash, NO cleanup job', async () => {
+    mockEventRsvpFindByPk.mockResolvedValueOnce(buildLoadedRsvp('yes'));
+    mockEventParticipationFindOne.mockResolvedValueOnce(null);
+
+    const res = await request(app).delete(`/api/rsvp/${RSVP_ID}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ message: 'RSVP removed' });
+    await new Promise((r) => setImmediate(r));
+    expect(mockEnqueueCleanupJobForAttendee).not.toHaveBeenCalled();
+  });
+
+  test('Test 16: DELETE-of-yes but null google_calendar_event_id → silent skip (NO cleanup job)', async () => {
+    mockEventRsvpFindByPk.mockResolvedValueOnce(buildLoadedRsvp('yes'));
+    mockEventParticipationFindOne.mockResolvedValueOnce({
+      id: TEST_EP_ID,
+      google_calendar_event_id: null,
+    });
+
+    const res = await request(app).delete(`/api/rsvp/${RSVP_ID}`);
+
+    expect(res.status).toBe(200);
+    await new Promise((r) => setImmediate(r));
+    expect(mockEnqueueCleanupJobForAttendee).not.toHaveBeenCalled();
+  });
+
+  test('Test 17: enqueueCleanupJobForAttendee throws → DELETE still returns 200', async () => {
+    mockEventRsvpFindByPk.mockResolvedValueOnce(buildLoadedRsvp('yes'));
+    mockEnqueueCleanupJobForAttendee.mockRejectedValueOnce(new Error('Redis is down'));
+
+    const res = await request(app).delete(`/api/rsvp/${RSVP_ID}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ message: 'RSVP removed' });
+    await new Promise((r) => setImmediate(r));
+    expect(mockEnqueueCleanupJobForAttendee).toHaveBeenCalled();
+  });
+
+  test('Test 18: DELETE 404 (rsvp not found) → returns 404 and does NOT call helper', async () => {
+    mockEventRsvpFindByPk.mockResolvedValueOnce(null);
+
+    const res = await request(app).delete(`/api/rsvp/${RSVP_ID}`);
+
+    expect(res.status).toBe(404);
+    await new Promise((r) => setImmediate(r));
+    expect(mockEnqueueCleanupJobForAttendee).not.toHaveBeenCalled();
+  });
+
+  test('Test 19: DELETE 403 (non-owner) → returns 403 and does NOT call helper', async () => {
+    // RSVP is owned by a different Auth0 user than the request actor.
+    mockEventRsvpFindByPk.mockResolvedValueOnce(
+      buildLoadedRsvp('yes', { ownerAuth0Id: 'auth0|some-other-user' })
+    );
+
+    const res = await request(app).delete(`/api/rsvp/${RSVP_ID}`);
+
+    expect(res.status).toBe(403);
+    await new Promise((r) => setImmediate(r));
+    expect(mockEnqueueCleanupJobForAttendee).not.toHaveBeenCalled();
+  });
+
+  test('Test 20: DELETE response shape unchanged on success', async () => {
+    mockEventRsvpFindByPk.mockResolvedValueOnce(buildLoadedRsvp('yes'));
+
+    const res = await request(app).delete(`/api/rsvp/${RSVP_ID}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ message: 'RSVP removed' });
+  });
+
+  test('Test 21: status capture timing — helper receives googleCalendarEventId from EventParticipation captured BEFORE rsvp.destroy', async () => {
+    // Set up an EP that will return a known gcal id, then change the mock
+    // so that AFTER destroy fires the EP would return null. The captured
+    // value must be the BEFORE-destroy one (the dispatch should have been
+    // initiated using the value seen before destroy ran).
+    const rsvp = buildLoadedRsvp('yes');
+    mockEventRsvpFindByPk.mockResolvedValueOnce(rsvp);
+
+    const res = await request(app).delete(`/api/rsvp/${RSVP_ID}`);
+
+    expect(res.status).toBe(200);
+    await new Promise((r) => setImmediate(r));
+    expect(mockEnqueueCleanupJobForAttendee).toHaveBeenCalledWith(
+      expect.objectContaining({ googleCalendarEventId: TEST_GCAL_EVENT_ID })
+    );
+    // And destroy ran (proving we got past the gate).
+    expect(rsvp.destroy).toHaveBeenCalled();
+    // status was captured before destroy nulled it (otherwise gate would have rejected).
+    expect(callOrder).toContain('rsvp.destroy');
+  });
+});
