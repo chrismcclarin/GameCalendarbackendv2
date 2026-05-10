@@ -5,7 +5,7 @@ const { BullMQAdapter } = require('@bull-board/api/bullMQAdapter');
 const { ExpressAdapter } = require('@bull-board/express');
 const { verifyAuth0Token } = require('../middleware/auth0');
 const { requireGroupAdmin } = require('../middleware/adminAuth');
-const { promptQueue, deadlineQueue, reminderQueue } = require('../queues');
+const { promptQueue, deadlineQueue, reminderQueue, gcalSyncQueue } = require('../queues');
 
 /**
  * Mount Bull Board dashboard with Auth0 protection
@@ -21,7 +21,9 @@ function mountBullBoard(app) {
     queues: [
       new BullMQAdapter(promptQueue),
       new BullMQAdapter(deadlineQueue),
-      new BullMQAdapter(reminderQueue)
+      new BullMQAdapter(reminderQueue),
+      // Phase 75 / GCAL-01: register gcal-sync queue in Bull Board for ops visibility (D-CONTEXT)
+      new BullMQAdapter(gcalSyncQueue)
     ],
     serverAdapter,
     options: {
