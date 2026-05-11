@@ -77,6 +77,29 @@ router.get('/search/email/:email', validateUserSearch, async (req, res) => {
 // This ensures the user MUST exist in Auth0 before we create them in our database
 router.get('/:user_id', async (req, res) => {
   try {
+    // Phase 78 / TZ-01: accept optional browser-detected timezone for auto-create
+    // persistence and existing-user null backfill. Query param wins over body to
+    // keep the call site (GET request from TimezoneProvider) simple. Empty string
+    // is treated as absent (frontend's "omit on detection failure" contract).
+    // Validation lives here in the route handler per CONTEXT D-Validation
+    // (not in middleware, not in the Sequelize model layer).
+    const rawTimezone =
+      (typeof req.query.timezone === 'string' && req.query.timezone) ||
+      (req.body && typeof req.body.timezone === 'string' && req.body.timezone) ||
+      null;
+    let detectedTimezone = null;
+    if (rawTimezone && rawTimezone.trim().length > 0) {
+      const candidate = rawTimezone.trim();
+      try {
+        // Reuse the exact IANA validation from PATCH /:user_id/timezone (~L504).
+        Intl.DateTimeFormat(undefined, { timeZone: candidate });
+        detectedTimezone = candidate;
+      } catch {
+        return res.status(400).json({ error: 'Invalid IANA timezone string' });
+      }
+    }
+    // detectedTimezone is now either a validated IANA string OR null (absent/empty).
+
     let user = await User.findOne({
       where: { user_id: req.params.user_id },
       include: [{ model: Group }]
@@ -149,6 +172,12 @@ router.get('/:user_id', async (req, res) => {
             user_id: req.params.user_id,
             email: userEmail,
             username: userName,
+            // TZ-01: persist browser-detected timezone on first creation if supplied.
+            // If detectedTimezone is null we DELIBERATELY omit the key so Sequelize
+            // applies the model defaultValue (null per migration 78-01) — sending
+            // `timezone: null` explicitly would risk a future model default of 'UTC'
+            // sneaking back in undetected. Absence is the safest signal.
+            ...(detectedTimezone ? { timezone: detectedTimezone } : {}),
           }
         });
         
