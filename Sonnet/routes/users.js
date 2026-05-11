@@ -7,6 +7,16 @@ const { writeOperationLimiter } = require('../middleware/rateLimiter');
 const auth0Service = require('../services/auth0Service');
 const smsService = require('../services/smsService');
 
+// Sentry SDK is initialized in server.js when SENTRY_DSN is set. Use a defensive
+// require so dev / test envs without the DSN don't blow up — addBreadcrumb /
+// captureException become no-ops there. Pattern mirrors workers/*.js.
+let Sentry = null;
+try {
+  Sentry = require('@sentry/node');
+} catch (_e) {
+  Sentry = null;
+}
+
 // Search user by email
 // Searches both our database and Auth0
 router.get('/search/email/:email', validateUserSearch, async (req, res) => {
@@ -254,11 +264,42 @@ router.get('/:user_id', async (req, res) => {
         }
       }
     }
-    
+
+    // TZ-01 (Phase 78): null-timezone safety-net backfill.
+    // If a user predates the auto-detect flow OR signed up while detection failed,
+    // their stored timezone is null. On any subsequent login, if the client sends
+    // a valid detected timezone, write it. NEVER overwrite a non-null stored value
+    // — user's explicit pick is sacrosanct (CONTEXT D-Backend). Strict `=== null`
+    // guard is the only check: 'UTC' and every other string are treated as
+    // legitimate explicit choices. Mismatch-on-login awareness is deferred.
+    if (user && user.timezone === null && detectedTimezone) {
+      try {
+        await user.update({ timezone: detectedTimezone });
+        if (Sentry && typeof Sentry.addBreadcrumb === 'function') {
+          Sentry.addBreadcrumb({
+            category: 'auth.timezone-backfill',
+            message: 'Backfilled null timezone for existing user on login',
+            level: 'info',
+            data: {
+              user_id: user.user_id,
+              timezone: detectedTimezone,
+            },
+          });
+        }
+        console.log(`Backfilled timezone for existing user ${user.user_id}: ${detectedTimezone}`);
+      } catch (err) {
+        // Backfill is best-effort — don't fail the GET request if the update fails.
+        console.error(`Failed to backfill timezone for ${user.user_id}:`, err.message);
+        if (Sentry && typeof Sentry.captureException === 'function') {
+          Sentry.captureException(err, { tags: { feature: 'timezone-backfill' } });
+        }
+      }
+    }
+
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
-    
+
     res.json(user);
   } catch (error) {
     res.status(500).json({ error: error.message });
