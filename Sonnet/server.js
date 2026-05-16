@@ -54,6 +54,7 @@ const webhooksRoutes = require('./routes/webhooks');
 const magicAuthRoutes = require('./routes/magicAuth');
 const groupPromptSettingsRoutes = require('./routes/groupPromptSettings');
 const availabilityResponseRoutes = require('./routes/availabilityResponse');
+const availabilityPrefillRoutes = require('./routes/availabilityPrefill');
 const availabilitySuggestionRoutes = require('./routes/availabilitySuggestion');
 const availabilityPromptRoutes = require('./routes/availabilityPrompt');
 const adminMetricsRoutes = require('./routes/adminMetrics');
@@ -244,6 +245,7 @@ app.use('/api/feedback', feedbackLimiter, optionalAuth, feedbackRoutes); // Feed
 app.use('/api/webhooks', webhooksRoutes); // External service webhooks (Resend, etc.)
 app.use('/api/magic-auth', magicAuthRoutes); // Magic link validation (no Auth0 required)
 app.use('/api/availability-responses', availabilityResponseRoutes); // Availability form submission (magic token auth)
+app.use('/api/availability-prefill', availabilityPrefillRoutes); // Check-in pre-fill (GCal / saved availability — magic token auth)
 // Public invite info endpoint handled by conditional auth below
 app.use('/api/rsvp', writeOperationLimiter, rsvpRoutes); // RSVP: GET /respond is public; POST/GET/DELETE have per-route auth
 app.use('/api/event-brings', writeOperationLimiter, eventBringRoutes); // Event brings: per-route auth inside
