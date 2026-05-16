@@ -26,6 +26,7 @@ const {
   AvailabilityPrompt,
   MagicToken,
   TokenAnalytics,
+  UserAvailability,
   sequelize,
 } = require('../../models');
 const { generateToken } = require('../../services/magicTokenService');
@@ -77,9 +78,9 @@ describe('POST /api/availability-prefill/gcal', () => {
     connectedToken = await generateToken(connectedUser, testPrompt);
   });
 
-  afterAll(async () => {
-    await sequelize.close();
-  });
+  // NOTE: sequelize.close() moved to the trailing top-level afterAll so it
+  // runs AFTER the CHKIN-06 /saved describe block below. Closing here would
+  // tear down the connection mid-suite.
 
   beforeEach(async () => {
     googleCalendarService.getBusyTimesForDateRange.mockReset();
@@ -297,4 +298,313 @@ describe('POST /api/availability-prefill/gcal', () => {
     expect(res.body.count).toBe(0);
     expect(res.body.slot_ids).toEqual([]);
   });
+});
+
+// =====================================================================
+// CHKIN-06 — saved-availability pre-fill
+// =====================================================================
+describe('POST /api/availability-prefill/saved', () => {
+  // We use America/Los_Angeles so the pattern matcher takes the explicit
+  // slotToLocal branch (deterministic) instead of the server-local
+  // getDay() fallback (host-TZ-dependent).
+  const TZ = 'America/Los_Angeles';
+  const WEEK_START = '2026-05-18'; // Monday in UTC; in LA this is Sun→Sat 2026-05-17→2026-05-23 local
+
+  let recurringUser;       // has a Mon-19:00-22:00 recurring pattern
+  let overrideUser;        // has the same pattern + a Mon override that subtracts 20:00-21:00
+  let emptyUser;           // ZERO saved data — Pitfall 3 guard target
+  let testGroup;
+  let testPrompt;
+  let recurringToken;
+  let overrideToken;
+  let emptyToken;
+
+  beforeAll(async () => {
+    // Reuse the schema from the /gcal describe (sequelize.sync was already
+    // run with force:true in beforeAll above; we just append new rows).
+    recurringUser = await User.create({
+      user_id: 'auth0|prefill-saved-recurring',
+      username: 'Saved Recurring',
+      email: 'saved-recurring@test.com',
+      google_calendar_enabled: false,
+      google_calendar_token: null,
+      timezone: TZ,
+    });
+
+    overrideUser = await User.create({
+      user_id: 'auth0|prefill-saved-override',
+      username: 'Saved Override',
+      email: 'saved-override@test.com',
+      google_calendar_enabled: false,
+      google_calendar_token: null,
+      timezone: TZ,
+    });
+
+    emptyUser = await User.create({
+      user_id: 'auth0|prefill-saved-empty',
+      username: 'Saved Empty',
+      email: 'saved-empty@test.com',
+      google_calendar_enabled: false,
+      google_calendar_token: null,
+      timezone: TZ,
+    });
+
+    testGroup = await Group.create({
+      name: 'Prefill Saved Test Group',
+      group_id: 'prefill-saved-group-001',
+    });
+
+    testPrompt = await AvailabilityPrompt.create({
+      group_id: testGroup.id,
+      prompt_date: new Date(),
+      deadline: new Date(Date.now() + 72 * 60 * 60 * 1000),
+      status: 'active',
+      week_identifier: '2026-W21-saved-prefill',
+    });
+
+    // Recurring user: Monday 19:00-22:00 LA local → 3 hours × 2 slots/hr = 6 slots
+    // Local Mon 19:00 PDT == UTC Tue 02:00. So the expected slot IDs are
+    // 2026-05-19T02:00, 02:30, 03:00, 03:30, 04:00, 04:30 (UTC).
+    await UserAvailability.create({
+      user_id: recurringUser.user_id,
+      type: 'recurring_pattern',
+      pattern_data: { dayOfWeek: 1, startTime: '19:00', endTime: '22:00', timezone: TZ },
+      start_date: '2026-05-01',
+      end_date: null,
+      is_available: null,
+      timezone: TZ,
+    });
+
+    // Override user: same recurring pattern PLUS an override that marks
+    // Mon 2026-05-18 local 20:00-21:00 as NOT available. The expected
+    // override-beats-recurring result is the recurring 6 slots MINUS
+    // 20:00 and 20:30 local = 4 slots.
+    await UserAvailability.create({
+      user_id: overrideUser.user_id,
+      type: 'recurring_pattern',
+      pattern_data: { dayOfWeek: 1, startTime: '19:00', endTime: '22:00', timezone: TZ },
+      start_date: '2026-05-01',
+      end_date: null,
+      is_available: null,
+      timezone: TZ,
+    });
+    await UserAvailability.create({
+      user_id: overrideUser.user_id,
+      type: 'specific_override',
+      pattern_data: { date: '2026-05-18', startTime: '20:00', endTime: '21:00', isAvailable: false },
+      start_date: '2026-05-18',
+      end_date: '2026-05-18',
+      is_available: false,
+      timezone: TZ,
+    });
+
+    recurringToken = await generateToken(recurringUser, testPrompt);
+    overrideToken = await generateToken(overrideUser, testPrompt);
+    emptyToken = await generateToken(emptyUser, testPrompt);
+  });
+
+  beforeEach(async () => {
+    await TokenAnalytics.destroy({ where: {} });
+  });
+
+  // ------------------------------------------------------------------
+  // Input validation (mirrors /gcal)
+  // ------------------------------------------------------------------
+
+  it('returns 400 when magic_token is missing', async () => {
+    const res = await request(app)
+      .post('/api/availability-prefill/saved')
+      .send({ start_date: WEEK_START, num_days: 7, timezone: TZ });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/magic_token/);
+  });
+
+  it('returns 400 when start_date format is invalid', async () => {
+    const res = await request(app)
+      .post('/api/availability-prefill/saved')
+      .send({
+        magic_token: recurringToken,
+        start_date: '05/18/2026',
+        num_days: 7,
+        timezone: TZ,
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/YYYY-MM-DD/);
+  });
+
+  it('returns 400 when num_days > 14', async () => {
+    const res = await request(app)
+      .post('/api/availability-prefill/saved')
+      .send({
+        magic_token: recurringToken,
+        start_date: WEEK_START,
+        num_days: 30,
+        timezone: TZ,
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/num_days/);
+  });
+
+  it('returns 400 when num_days < 1', async () => {
+    const res = await request(app)
+      .post('/api/availability-prefill/saved')
+      .send({
+        magic_token: recurringToken,
+        start_date: WEEK_START,
+        num_days: 0,
+        timezone: TZ,
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/num_days/);
+  });
+
+  it('returns 400 when timezone is invalid', async () => {
+    const res = await request(app)
+      .post('/api/availability-prefill/saved')
+      .send({
+        magic_token: recurringToken,
+        start_date: WEEK_START,
+        num_days: 7,
+        timezone: 'Not/A_Real_Timezone',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/timezone/);
+  });
+
+  // ------------------------------------------------------------------
+  // Happy path — recurring pattern
+  // ------------------------------------------------------------------
+
+  it('returns slot_ids for a user with a recurring Monday pattern', async () => {
+    const res = await request(app)
+      .post('/api/availability-prefill/saved')
+      .send({
+        magic_token: recurringToken,
+        start_date: WEEK_START,
+        num_days: 7,
+        timezone: TZ,
+      });
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.slot_ids)).toBe(true);
+    expect(res.body.count).toBe(res.body.slot_ids.length);
+
+    // 3 hours × 2 30-min slots = 6 slots on Mon 19:00-22:00 LA local
+    // Mon 19:00 PDT = UTC Tue 02:00 → expect six consecutive UTC slots.
+    expect(res.body.count).toBe(6);
+    expect(res.body.slot_ids).toEqual(
+      expect.arrayContaining([
+        '2026-05-19T02:00:00.000Z',
+        '2026-05-19T02:30:00.000Z',
+        '2026-05-19T03:00:00.000Z',
+        '2026-05-19T03:30:00.000Z',
+        '2026-05-19T04:00:00.000Z',
+        '2026-05-19T04:30:00.000Z',
+      ])
+    );
+
+    // All IDs match the grid's generateSlotId format
+    for (const id of res.body.slot_ids) {
+      expect(id).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00\.000Z$/);
+    }
+  });
+
+  // ------------------------------------------------------------------
+  // Override-beats-recurring (research Pattern 2 / CONTEXT D-CHKIN-06)
+  // ------------------------------------------------------------------
+
+  it('subtracts a specific override that flips a recurring slot to unavailable', async () => {
+    const res = await request(app)
+      .post('/api/availability-prefill/saved')
+      .send({
+        magic_token: overrideToken,
+        start_date: WEEK_START,
+        num_days: 7,
+        timezone: TZ,
+      });
+
+    expect(res.status).toBe(200);
+    // 6 recurring slots minus 20:00 and 20:30 LA local = 4 slots
+    // 20:00 LA Mon = 03:00 UTC Tue, 20:30 LA = 03:30 UTC Tue
+    expect(res.body.count).toBe(4);
+    expect(res.body.slot_ids).toEqual(
+      expect.arrayContaining([
+        '2026-05-19T02:00:00.000Z',
+        '2026-05-19T02:30:00.000Z',
+        '2026-05-19T04:00:00.000Z',
+        '2026-05-19T04:30:00.000Z',
+      ])
+    );
+    // The override-subtracted slots must NOT be present
+    expect(res.body.slot_ids).not.toContain('2026-05-19T03:00:00.000Z');
+    expect(res.body.slot_ids).not.toContain('2026-05-19T03:30:00.000Z');
+  });
+
+  // ------------------------------------------------------------------
+  // Pitfall 3 guard — zero-pattern user must NOT paint the whole grid
+  // ------------------------------------------------------------------
+
+  it('returns empty slot_ids for a user with ZERO saved patterns (Pitfall 3 guard)', async () => {
+    const res = await request(app)
+      .post('/api/availability-prefill/saved')
+      .send({
+        magic_token: emptyToken,
+        start_date: WEEK_START,
+        num_days: 7,
+        timezone: TZ,
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.count).toBe(0);
+    expect(res.body.slot_ids).toEqual([]);
+  });
+
+  // ------------------------------------------------------------------
+  // { consume: false } assertion (Pitfall 6)
+  // ------------------------------------------------------------------
+
+  it('passes { consume: false } when validating the magic token (source-level assertion)', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(
+      path.join(__dirname, '..', '..', 'routes', 'availabilityPrefill.js'),
+      'utf8'
+    );
+    // Two occurrences expected: /gcal handler (plan 02) + /saved handler (plan 03)
+    const matches = source.match(/validateToken\s*\([^)]*\{\s*consume:\s*false\s*\}\s*\)/g) || [];
+    expect(matches.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('can be called twice in a row without invalidating the token (consume:false in action)', async () => {
+    const first = await request(app)
+      .post('/api/availability-prefill/saved')
+      .send({
+        magic_token: recurringToken,
+        start_date: WEEK_START,
+        num_days: 7,
+        timezone: TZ,
+      });
+    const second = await request(app)
+      .post('/api/availability-prefill/saved')
+      .send({
+        magic_token: recurringToken,
+        start_date: WEEK_START,
+        num_days: 7,
+        timezone: TZ,
+      });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(second.body.count).toBe(first.body.count);
+  });
+});
+
+// Top-level teardown — runs after BOTH the /gcal and /saved describes.
+afterAll(async () => {
+  await sequelize.close();
 });
