@@ -221,8 +221,11 @@ async function seedDatabase() {
     ];
 
     for (const { user, group, role } of userGroups) {
+      // UserGroup.user_id holds the Auth0 string id (Users.user_id), NOT the
+      // UUID primary key — on a fresh sync()'d schema the association FK
+      // rejects user.id outright.
       await UserGroup.findOrCreate({
-        where: { user_id: user.id, group_id: group.id },
+        where: { user_id: user.user_id, group_id: group.id },
         defaults: { role }
       });
     }
